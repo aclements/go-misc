@@ -101,6 +101,15 @@ func main() {
 				// available locally.
 				continue
 			}
+
+			// Create a revision directory. This way we
+			// have a record of commits with no failures.
+			revDir, err := revToDir(rev.Revision)
+			if err != nil {
+				log.Fatal(err)
+			}
+			ensureDir(revDir)
+
 			for i, res := range rev.Results {
 				if res == "" || res == "ok" {
 					continue
@@ -113,10 +122,10 @@ func main() {
 					if err != nil {
 						log.Fatal("fetching log: ", err)
 					}
-					if err := linkLog(rev, builder, logPath); err != nil {
+					if err := linkLog(revDir, builder, logPath); err != nil {
 						log.Fatal("linking log: ", err)
 					}
-				}(rev.Revision, status.Builders[i], res)
+				}(revDir, status.Builders[i], res)
 			}
 		}
 	}
@@ -213,22 +222,25 @@ func fetchLogNoSync(logURL, logPath string) error {
 
 // linkLog creates a symlink for finding logPath based on its git
 // revision and builder.
-func linkLog(revision, builder, logPath string) error {
-	// Get revision date info
-	date, err := revDate(revision)
-	if err != nil {
-		return err
-	}
-
+func linkLog(revDir, builder, logPath string) error {
 	// Create symlink
-	out := path.Join("rev", date.Format("2006-01-02T15:04:05")+"-"+revision[:7])
-	ensureDir(out)
-	err = os.Symlink("../../"+logPath, path.Join(out, builder))
+	err := os.Symlink("../../"+logPath, path.Join(revDir, builder))
 	if err != nil && !os.IsExist(err) {
 		return err
 	}
 
 	return nil
+}
+
+// revToDir returns the path of the revision directory for revision.
+func revToDir(revision string) (string, error) {
+	// Get revision date info
+	date, err := revDate(revision)
+	if err != nil {
+		return "", err
+	}
+
+	return path.Join("rev", date.Format("2006-01-02T15:04:05")+"-"+revision[:7]), nil
 }
 
 // revDate returns the commit date of a git revision.

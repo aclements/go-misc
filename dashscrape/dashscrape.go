@@ -95,6 +95,12 @@ func main() {
 			if rev.Repo != "go" {
 				continue
 			}
+			if rev.Revision == "e5048a5eaabdb86156d8de1a97d32eb898560e50" || rev.Revision == "5c688b1e5639640f5423dc0f2cade47f6df35c4b" {
+				// These commits were force-pushed
+				// away, so they're generally not
+				// available locally.
+				continue
+			}
 			for i, res := range rev.Results {
 				if res == "" || res == "ok" {
 					continue

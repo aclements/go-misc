@@ -31,9 +31,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path"
-	"strings"
 	"sync"
 	"time"
 
@@ -41,7 +39,6 @@ import (
 )
 
 var (
-	goRepo   = flag.String("C", os.ExpandEnv("$HOME/go"), "Go repository `path`")
 	nCommits = flag.Int("n", 300, "fetch logs for most recent `count` commits")
 	par      = flag.Int("j", 5, "download `num` files concurrently")
 )
@@ -104,7 +101,11 @@ func main() {
 
 			// Create a revision directory. This way we
 			// have a record of commits with no failures.
-			revDir, err := revToDir(rev.Revision)
+			date, err := parseRevDate(rev.Date)
+			if err != nil {
+				log.Fatal(err)
+			}
+			revDir, err := revToDir(rev.Revision, date)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -232,28 +233,12 @@ func linkLog(revDir, builder, logPath string) error {
 	return nil
 }
 
-// revToDir returns the path of the revision directory for revision.
-func revToDir(revision string) (string, error) {
-	// Get revision date info
-	date, err := revDate(revision)
-	if err != nil {
-		return "", err
-	}
-
-	return path.Join("rev", date.Format("2006-01-02T15:04:05")+"-"+revision[:7]), nil
+// parseRevDate parses a revision date in RFC3339.
+func parseRevDate(date string) (time.Time, error) {
+	return time.Parse(time.RFC3339, date)
 }
 
-// revDate returns the commit date of a git revision.
-func revDate(revision string) (time.Time, error) {
-	args := []string{"-C", *goRepo, "log", "-1", "--format=%cD", revision}
-	out, err := exec.Command("git", args...).CombinedOutput()
-	outs := string(out)
-	if err != nil {
-		if strings.Contains(outs, "bad object") {
-			err = fmt.Errorf("unknown commit; try sync'ing your repository")
-		}
-		return time.Time{}, fmt.Errorf("git %v: %v", strings.Join(args, " "), err)
-	}
-	outs = strings.TrimRight(outs, "\n")
-	return time.Parse("Mon, 2 Jan 2006 15:04:05 -0700", outs)
+// revToDir returns the path of the revision directory for revision.
+func revToDir(revision string, date time.Time) (string, error) {
+	return path.Join("rev", date.Format("2006-01-02T15:04:05")+"-"+revision[:7]), nil
 }

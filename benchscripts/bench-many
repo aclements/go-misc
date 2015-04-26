@@ -1,0 +1,72 @@
+#!/bin/zsh
+
+set -e
+
+if [[ $# != 3 ]]; then
+    echo "usage: bench-many rev-file out-dir iterations" >&2
+    exit 1
+fi
+
+revFile=$(realpath $1)
+outDir=$2
+iterations=$3
+mkdir -p $outDir/by-rev
+mkdir -p $outDir/by-date
+outDir=$(realpath $outDir)
+GOROOT=$(go env GOROOT)
+GOTOOLDIR=$(go env GOTOOLDIR)
+
+# Build benchmarks
+cat $revFile | while read rev; do
+    cd $GOROOT
+    rev=$(git rev-parse $rev)
+    revOut=$outDir/by-rev/$rev
+    if [[ -x $revOut/go1.test && -x $revOut/6g && -x $revOut/xbench ]]; then
+        continue
+    fi
+
+    echo "Building $rev"
+    git checkout -q $rev > $outDir/log
+    (cd $GOROOT/src && ./make.bash) >> $outDir/log 2>&1
+
+    if [[ ! -x $revOut/6g ]]; then
+        cp $GOTOOLDIR/6g $revOut/6g
+    fi
+
+    if [[ ! -x $revOut/go1.test ]]; then
+        cd $GOROOT/test/bench/go1
+        go test -c >> $outDir/log
+        mkdir -p $revOut
+        mv go1.test $revOut/go1.test
+    fi
+
+    if [[ ! -x $revOut/xbench ]]; then
+        go build -o $revOut/xbench golang.org/x/benchmarks/bench
+    fi
+done
+
+# Make date symlinks
+cat $revFile | while read rev; do
+    rev=$(git rev-parse $rev)
+    date=$(git log -n1 --format='%cI' $rev | sed 's/+00:00$//')
+    ln -snf ../by-rev/$rev $outDir/by-date/$date
+done
+
+# Run benchmarks
+for i in {1..$iterations}; do
+    cat $revFile | while read rev; do
+        cd $GOROOT
+        rev=$(git rev-parse $rev)
+        cd $outDir/by-rev/$rev
+        logName=go1.out.$(printf %03d $i)
+        if [[ -f $logName ]]; then
+            continue
+        fi
+        echo "$rev ($i)"
+        ./go1.test -test.bench . > go1.out.tmp
+        mv go1.out.tmp $logName
+    done
+done
+
+# TODO: Run 6g "benchmark" (with gctrace=1)
+# TODO: Run x/bench benchmarks (with gctrace=1)

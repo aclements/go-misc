@@ -35,7 +35,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/build/types"
+	"golang.org/x/build/types"
 )
 
 var (

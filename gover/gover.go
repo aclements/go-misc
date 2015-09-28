@@ -106,6 +106,7 @@ func doSave(name string, hash string, diff []byte) {
 	}
 	cpR(filepath.Join(goroot, "pkg", osArch), filepath.Join(savePath, "pkg", osArch))
 	cpR(filepath.Join(goroot, "pkg", "tool", osArch), filepath.Join(savePath, "pkg", "tool", osArch))
+	cpR(filepath.Join(goroot, "src"), filepath.Join(savePath, "src"))
 
 	if diff != nil {
 		if err := ioutil.WriteFile(filepath.Join(savePath, "diff"), diff, 0666); err != nil {
@@ -161,6 +162,11 @@ func cpR(src, dst string) {
 		if info.IsDir() {
 			return nil
 		}
+		base := filepath.Base(path)
+		if base == "core" || strings.HasSuffix(base, ".test") {
+			return nil
+		}
+
 		cp(path, dst+path[len(src):])
 		return nil
 	})

@@ -106,6 +106,7 @@ func doSave(name string, hash string, diff []byte) {
 	}
 	cpR(filepath.Join(goroot, "pkg", osArch), filepath.Join(savePath, "pkg", osArch))
 	cpR(filepath.Join(goroot, "pkg", "tool", osArch), filepath.Join(savePath, "pkg", "tool", osArch))
+	cpR(filepath.Join(goroot, "pkg", "include"), filepath.Join(savePath, "pkg", "include"))
 	cpR(filepath.Join(goroot, "src"), filepath.Join(savePath, "src"))
 
 	if diff != nil {

@@ -156,6 +156,9 @@ func cp(src, dst string) {
 	if err := ioutil.WriteFile(dst, data, st.Mode()); err != nil {
 		log.Fatal(err)
 	}
+	if err := os.Chtimes(dst, st.ModTime(), st.ModTime()); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func cpR(src, dst string) {

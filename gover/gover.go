@@ -99,7 +99,10 @@ func doSave(name string, hash string, diff []byte) {
 	osArch := goos + "_" + goarch
 
 	for _, binTool := range binTools {
-		cp(filepath.Join(goroot, "bin", binTool), filepath.Join(savePath, "bin", binTool))
+		src := filepath.Join(goroot, "bin", binTool)
+		if _, err := os.Stat(src); err == nil {
+			cp(src, filepath.Join(savePath, "bin", binTool))
+		}
 	}
 	cpR(filepath.Join(goroot, "pkg", osArch), filepath.Join(savePath, "pkg", osArch))
 	cpR(filepath.Join(goroot, "pkg", "tool", osArch), filepath.Join(savePath, "pkg", "tool", osArch))

@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -20,11 +21,27 @@ import (
 
 var (
 	verbose = flag.Bool("v", false, "print commands being run")
+	verDir  = flag.String("dir", defaultVerDir(), "`directory` of saved Go roots")
 )
 
 var goroot = runtime.GOROOT()
 
 var binTools = []string{"go", "godoc", "gofmt"}
+
+func defaultVerDir() string {
+	cache := os.Getenv("XDG_CACHE_HOME")
+	if cache == "" {
+		home := os.Getenv("HOME")
+		if home == "" {
+			u, err := user.Current()
+			if err != nil {
+				home = u.HomeDir
+			}
+		}
+		cache = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(cache, "gover")
+}
 
 func main() {
 	flag.Usage = func() {
@@ -88,7 +105,7 @@ func getHash() (string, []byte) {
 
 func doSave(name string, hash string, diff []byte) {
 	// Create a minimal GOROOT at $GOROOT/gover/hash.
-	savePath := filepath.Join(goroot, "gover", hash)
+	savePath := filepath.Join(*verDir, hash)
 	goos, goarch := runtime.GOOS, runtime.GOARCH
 	if x := os.Getenv("GOOS"); x != "" {
 		goos = x
@@ -117,7 +134,7 @@ func doSave(name string, hash string, diff []byte) {
 
 	// If there's a name, symlink it under that name.
 	if name != "" {
-		err := os.Symlink(hash, filepath.Join(goroot, "gover", name))
+		err := os.Symlink(hash, filepath.Join(*verDir, name))
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -125,7 +142,7 @@ func doSave(name string, hash string, diff []byte) {
 }
 
 func doRun(name string, cmd []string) {
-	savePath := filepath.Join(goroot, "gover", name)
+	savePath := filepath.Join(*verDir, name)
 
 	c := exec.Command(filepath.Join(savePath, "bin", cmd[0]), cmd[1:]...)
 	c.Env = append([]string(nil), os.Environ()...)

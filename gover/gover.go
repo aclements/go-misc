@@ -44,6 +44,8 @@ func defaultVerDir() string {
 }
 
 func main() {
+	log.SetFlags(0)
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage:\n  %s [flags] save [name]\n  %s [flags] run name command...\n\nFlags:\n", os.Args[0], os.Args[0])
 		flag.PrintDefaults()
@@ -133,7 +135,7 @@ func doSave(name string, hash string, diff []byte) {
 	}
 
 	// If there's a name, symlink it under that name.
-	if name != "" {
+	if name != "" && name != hash {
 		err := os.Symlink(hash, filepath.Join(*verDir, name))
 		if err != nil {
 			log.Fatal(err)

@@ -16,7 +16,10 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -47,7 +50,11 @@ func main() {
 	log.SetFlags(0)
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage:\n  %s [flags] save [name]\n  %s [flags] run name command...\n\nFlags:\n", os.Args[0], os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage:\n")
+		fmt.Fprintf(os.Stderr, "  %s [flags] save [name]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] list\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] run name command...\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "\nFlags:\n")
 		flag.PrintDefaults()
 	}
 
@@ -69,6 +76,13 @@ func main() {
 			name = flag.Arg(1)
 		}
 		doSave(name, hash, diff)
+
+	case "list":
+		if flag.NArg() > 1 {
+			flag.Usage()
+			os.Exit(2)
+		}
+		doList()
 
 	case "run":
 		if flag.NArg() < 3 {
@@ -147,6 +161,104 @@ func doSave(name string, hash string, diff []byte) {
 		if err != nil {
 			log.Fatal(err)
 		}
+	}
+}
+
+type commit struct {
+	authorDate time.Time
+	topLine    string
+}
+
+func parseCommit(obj []byte) commit {
+	out := commit{}
+	lines := strings.Split(string(obj), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "author ") {
+			fs := strings.Fields(line)
+			secs, err := strconv.ParseInt(fs[len(fs)-2], 10, 64)
+			if err != nil {
+				log.Fatal("malformed author in commit: %s", err)
+			}
+			out.authorDate = time.Unix(secs, 0)
+		}
+		if len(line) == 0 {
+			out.topLine = lines[i+1]
+			break
+		}
+	}
+	return out
+}
+
+type saveInfo struct {
+	base   string
+	names  []string
+	commit commit
+}
+
+type saveInfoSorter []*saveInfo
+
+func (s saveInfoSorter) Len() int {
+	return len(s)
+}
+
+func (s saveInfoSorter) Less(i, j int) bool {
+	return s[i].commit.authorDate.Before(s[j].commit.authorDate)
+}
+
+func (s saveInfoSorter) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
+}
+
+func doList() {
+	files, err := ioutil.ReadDir(*verDir)
+	if os.IsNotExist(err) {
+		return
+	} else if err != nil {
+		log.Fatal(err)
+	}
+
+	baseMap := make(map[string]*saveInfo)
+	bases := []*saveInfo{}
+	for _, file := range files {
+		if !file.IsDir() {
+			continue
+		}
+		info := &saveInfo{base: file.Name(), names: []string{}}
+		baseMap[file.Name()] = info
+		bases = append(bases, info)
+
+		commit, err := ioutil.ReadFile(filepath.Join(*verDir, file.Name(), "commit"))
+		if os.IsNotExist(err) {
+			continue
+		}
+		info.commit = parseCommit(commit)
+	}
+	for _, file := range files {
+		if file.Mode()&os.ModeType == os.ModeSymlink {
+			base, err := os.Readlink(filepath.Join(*verDir, file.Name()))
+			if err != nil {
+				continue
+			}
+			if info, ok := baseMap[base]; ok {
+				info.names = append(info.names, file.Name())
+			}
+		}
+	}
+
+	sort.Sort(saveInfoSorter(bases))
+
+	for _, info := range bases {
+		fmt.Print(info.base)
+		if !info.commit.authorDate.IsZero() {
+			fmt.Printf(" %s", info.commit.authorDate.Local().Format("2006-01-02T15:04:05"))
+		}
+		if len(info.names) > 0 {
+			fmt.Printf(" %s", info.names)
+		}
+		if info.commit.topLine != "" {
+			fmt.Printf(" %s", info.commit.topLine)
+		}
+		fmt.Println()
 	}
 }
 

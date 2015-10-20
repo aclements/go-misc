@@ -83,24 +83,25 @@ func main() {
 	}
 }
 
+func gitCmd(cmd string, args ...string) string {
+	args = append([]string{"-C", goroot, cmd}, args...)
+	c := exec.Command("git", args...)
+	c.Stderr = os.Stderr
+	output, err := c.Output()
+	if err != nil {
+		log.Fatal("error executing git %s: %s", strings.Join(args, " "), err)
+	}
+	return string(output)
+}
+
 func getHash() (string, []byte) {
-	c := exec.Command("git", "-C", goroot, "rev-parse", "--short", "HEAD")
-	out, err := c.CombinedOutput()
-	if err != nil {
-		log.Fatalf("git error %s: %s", err, out)
-	}
+	rev := strings.TrimSpace(string(gitCmd("rev-parse", "--short", "HEAD")))
 
-	rev := strings.TrimSpace(string(out))
+	diff := []byte(gitCmd("diff", "HEAD"))
 
-	c = exec.Command("git", "-C", goroot, "diff", "HEAD")
-	out, err = c.CombinedOutput()
-	if err != nil {
-		log.Fatal("git error %s: %s", err, out)
-	}
-
-	if len(bytes.TrimSpace(out)) > 0 {
-		diffHash := fmt.Sprintf("%x", sha1.Sum(out))
-		return rev + "+" + diffHash[:10], out
+	if len(bytes.TrimSpace(diff)) > 0 {
+		diffHash := fmt.Sprintf("%x", sha1.Sum(diff))
+		return rev + "+" + diffHash[:10], diff
 	}
 	return rev, nil
 }
@@ -132,6 +133,12 @@ func doSave(name string, hash string, diff []byte) {
 		if err := ioutil.WriteFile(filepath.Join(savePath, "diff"), diff, 0666); err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	// Save commit object.
+	commit := gitCmd("cat-file", "commit", "HEAD")
+	if err := ioutil.WriteFile(filepath.Join(savePath, "commit"), []byte(commit), 0666); err != nil {
+		log.Fatal(err)
 	}
 
 	// If there's a name, symlink it under that name.

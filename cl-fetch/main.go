@@ -71,6 +71,12 @@ func main() {
 	// in to this one.
 	origin := gitOutput("config", "remote.origin.url")
 
+	// Get the existing CL tags.
+	haveTags := map[string]bool{}
+	for _, tag := range strings.Split(gitOutput("tag"), "\n") {
+		haveTags[tag] = true
+	}
+
 	c := gerrit.NewClient("https://go-review.googlesource.com", gerrit.GitCookiesAuth())
 
 	cls, err := c.QueryChanges(query, gerrit.QueryChangesOpt{
@@ -91,38 +97,43 @@ func main() {
 	hashOrder := []string{}
 	for _, cl := range cls {
 		for commitID, rev := range cl.Revisions {
-			any := false
-			for _, fetch := range rev.Fetch {
-				if fetch.URL == origin {
-					fetchCmd = append(fetchCmd, fetch.Ref)
-					any = true
-					break
+			tag := fmt.Sprintf("cl/%d/%d", cl.ChangeNumber, rev.PatchSetNumber)
+			if !haveTags[tag] {
+				any := false
+				for _, fetch := range rev.Fetch {
+					if fetch.URL == origin {
+						fetchCmd = append(fetchCmd, fetch.Ref)
+						any = true
+						break
+					}
 				}
-			}
-			if !any {
-				continue
+				if !any {
+					continue
+				}
 			}
 
 			tags[commitID] = &Tag{
-				tag:    fmt.Sprintf("cl/%d/%d", cl.ChangeNumber, rev.PatchSetNumber),
+				tag:    tag,
 				commit: rev.Commit,
 			}
 
 			hashOrder = append(hashOrder, commitID)
 		}
 	}
-	if len(fetchCmd) == 3 {
-		// Nothing to do. Unfortunately, we can't tell the
-		// difference between no CLs matching our query and
-		// the current repo being completely unrelated to the
-		// Gerrit instance.
-		return
-	}
 
 	// Execute git fetch and tag commands.
-	git(fetchCmd...)
+	if len(fetchCmd) != 3 {
+		git(fetchCmd...)
+		fmt.Println()
+	}
 	for commitID, tag := range tags {
-		git("tag", tag.tag, commitID)
+		if !haveTags[tag.tag] {
+			git("tag", tag.tag, commitID)
+		}
+	}
+	if *flagDry {
+		// Separate command from printed tags.
+		fmt.Println()
 	}
 
 	// Print tags.
@@ -137,7 +148,7 @@ func main() {
 	}
 
 	printed := make(map[string]bool)
-	needBlank := true
+	needBlank := false
 	for i := range hashOrder {
 		commitID := hashOrder[len(hashOrder)-i-1]
 		if !leafs[commitID] {

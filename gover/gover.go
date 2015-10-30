@@ -103,7 +103,7 @@ func gitCmd(cmd string, args ...string) string {
 	c.Stderr = os.Stderr
 	output, err := c.Output()
 	if err != nil {
-		log.Fatal("error executing git %s: %s", strings.Join(args, " "), err)
+		log.Fatalf("error executing git %s: %s", strings.Join(args, " "), err)
 	}
 	return string(output)
 }
@@ -177,7 +177,7 @@ func parseCommit(obj []byte) commit {
 			fs := strings.Fields(line)
 			secs, err := strconv.ParseInt(fs[len(fs)-2], 10, 64)
 			if err != nil {
-				log.Fatal("malformed author in commit: %s", err)
+				log.Fatalf("malformed author in commit: %s", err)
 			}
 			out.authorDate = time.Unix(secs, 0)
 		}

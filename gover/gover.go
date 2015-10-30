@@ -27,6 +27,9 @@ var (
 	verDir  = flag.String("dir", defaultVerDir(), "`directory` of saved Go roots")
 )
 
+// TODO: Is this is sane default? If your working directory is another
+// Go tree and you do a 'save' or a 'build', this is probably
+// surprising.
 var goroot = runtime.GOROOT()
 
 var binTools = []string{"go", "godoc", "gofmt"}
@@ -51,9 +54,10 @@ func main() {
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  %s [flags] save [name]\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] list\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] run name command...\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] save [name] - save current build\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] run name command... - run <command> using build <name>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nFlags:\n")
 		flag.PrintDefaults()
 	}
@@ -65,7 +69,7 @@ func main() {
 	}
 
 	switch flag.Arg(0) {
-	case "save":
+	case "save", "build":
 		if flag.NArg() > 2 {
 			flag.Usage()
 			os.Exit(2)
@@ -74,8 +78,55 @@ func main() {
 		name := ""
 		if flag.NArg() >= 2 {
 			name = flag.Arg(1)
+			if name == hash {
+				name = ""
+			}
 		}
-		doSave(name, hash, diff)
+
+		// Validate paths.
+		savePath := filepath.Join(*verDir, hash)
+		st, err := os.Stat(savePath)
+		hashExists := err == nil && st.IsDir()
+
+		nameExists, nameRight := true, true
+		if name != "" {
+			st2, err := os.Stat(filepath.Join(*verDir, name))
+			nameExists = err == nil && st2.IsDir()
+			if nameExists {
+				nameRight = os.SameFile(st, st2)
+			}
+		}
+
+		if flag.Arg(0) == "build" {
+			if hashExists {
+				if !nameRight {
+					log.Fatalf("name `%s' exists and refers to another build", name)
+				}
+				msg := fmt.Sprintf("saved build `%s' already exists", hash)
+				if !nameExists {
+					doLink(hash, name)
+					msg += fmt.Sprintf("; added name `%s'", name)
+				}
+				fmt.Fprintln(os.Stderr, msg)
+				os.Exit(0)
+			}
+
+			doBuild()
+		} else {
+			if hashExists {
+				log.Fatalf("saved build `%s' already exists", hash)
+			}
+			if nameExists {
+				log.Fatalf("saved build `%s' already exists", name)
+			}
+		}
+		doSave(hash, diff)
+		doLink(hash, name)
+		if name == "" {
+			fmt.Fprintf(os.Stderr, "saved build as `%s'\n", hash)
+		} else {
+			fmt.Fprintf(os.Stderr, "saved build as `%s' and `%s'\n", hash, name)
+		}
 
 	case "list":
 		if flag.NArg() > 1 {
@@ -120,7 +171,18 @@ func getHash() (string, []byte) {
 	return rev, nil
 }
 
-func doSave(name string, hash string, diff []byte) {
+func doBuild() {
+	c := exec.Command("./make.bash")
+	c.Dir = filepath.Join(goroot, "src")
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		log.Fatalf("error executing make.bash: %s", err)
+		os.Exit(1)
+	}
+}
+
+func doSave(hash string, diff []byte) {
 	// Create a minimal GOROOT at $GOROOT/gover/hash.
 	savePath := filepath.Join(*verDir, hash)
 	goos, goarch := runtime.GOOS, runtime.GOARCH
@@ -154,8 +216,9 @@ func doSave(name string, hash string, diff []byte) {
 	if err := ioutil.WriteFile(filepath.Join(savePath, "commit"), []byte(commit), 0666); err != nil {
 		log.Fatal(err)
 	}
+}
 
-	// If there's a name, symlink it under that name.
+func doLink(hash, name string) {
 	if name != "" && name != hash {
 		err := os.Symlink(hash, filepath.Join(*verDir, name))
 		if err != nil {

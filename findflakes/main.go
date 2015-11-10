@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/pprof"
 	"sort"
@@ -22,6 +23,10 @@ var (
 	flagBranch = flag.String("branch", "master", "analyze commits to `branch`")
 	flagHTML   = flag.Bool("html", false, "print an HTML report")
 	flagLimit  = flag.Int("limit", 0, "process only most recent `N` revisions")
+
+	// TODO: Is this really just a separate mode? Should we have
+	// subcommands?
+	flagGrep = flag.String("grep", "", "show analysis for logs matching `regexp`")
 )
 
 func defaultRevDir() string {
@@ -35,9 +40,6 @@ func defaultRevDir() string {
 	}
 	return ""
 }
-
-// TODO: Support searching for a particular failure and printing the
-// flake report for just that failure.
 
 // TODO: Tool you can point at a failure log to annotate each failure
 // in the log with links to past instances of that failure. This just
@@ -112,6 +114,21 @@ func main() {
 		revs = revs[len(revs)-*flagLimit:]
 	}
 
+	if *flagGrep != "" {
+		// Grep mode.
+		re, err := regexp.Compile(*flagGrep)
+		if err != nil {
+			log.Fatal(err)
+		}
+		failures := grepFailures(revs, re)
+		if len(failures) == 0 {
+			return
+		}
+		fc := newFailureClass(revs, failures)
+		printTextFlakeReport(os.Stdout, fc)
+		return
+	}
+
 	// Extract failures from logs.
 	failures, meta := extractFailures(revs)
 
@@ -122,23 +139,12 @@ func main() {
 	// tests.
 	classes := []*failureClass{}
 	for class, indexes := range failureClasses {
-		fc := failureClass{
-			Class:    class,
-			Revs:     revs,
-			Failures: []*failure{},
+		failures := []*failure{}
+		for _, fi := range indexes {
+			failures = append(failures, meta[fi])
 		}
-		times := []int{}
-		for i, fi := range indexes {
-			fc.Failures = append(fc.Failures, meta[fi])
-
-			t := meta[fi].T
-			if i == 0 || times[len(times)-1] != t {
-				times = append(times, t)
-			}
-		}
-		fc.Test = FlakeTest(times)
-		fc.Latest = &fc.Test.All[0]
-		fc.Current = fc.Latest.StillHappening(len(revs) - 1)
+		fc := newFailureClass(revs, failures)
+		fc.Class = class
 
 		// Trim failure classes below thresholds. We leave out
 		// classes with extremely low failure probabilities
@@ -149,7 +155,7 @@ func main() {
 			continue
 		}
 
-		classes = append(classes, &fc)
+		classes = append(classes, fc)
 	}
 
 	// Sort failure classes by likelihood that failure is still
@@ -235,6 +241,70 @@ func extractFailures(revs []*Revision) ([]*loganal.Failure, []*failure) {
 	return failures, meta
 }
 
+func grepFailures(revs []*Revision, re *regexp.Regexp) []*failure {
+	// TODO: Unify better with extractFailures. Consider moving
+	// *loganal.Failure in to struct failure so the task is to
+	// produce a *failure in both functions.
+
+	// Create grep tasks.
+	type Task struct {
+		t     int
+		build *Build
+		res   chan *failure
+	}
+	tasks := []Task{}
+	for t, rev := range revs {
+		for _, build := range rev.Builds {
+			if build.Status != BuildFailed {
+				continue
+			}
+			tasks = append(tasks, Task{t, build, make(chan *failure, 1)})
+		}
+	}
+	todo := make(chan int)
+	go func() {
+		for i := range tasks {
+			todo <- i
+		}
+		close(todo)
+	}()
+
+	// Run failure extraction.
+	for i := 0; i < 4*runtime.GOMAXPROCS(-1); i++ {
+		go func() {
+			for i := range todo {
+				task := tasks[i]
+
+				data, err := task.build.ReadLog()
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				if re.Match(data) {
+					task.res <- &failure{
+						T:          task.t,
+						CommitsAgo: len(revs) - task.t - 1,
+						Rev:        revs[task.t],
+						Build:      task.build,
+					}
+				} else {
+					task.res <- nil
+				}
+			}
+		}()
+	}
+
+	// Gather results.
+	failures := []*failure{}
+	for _, task := range tasks {
+		f := <-task.res
+		if f != nil {
+			failures = append(failures, f)
+		}
+	}
+	return failures
+}
+
 type failure struct {
 	T          int
 	CommitsAgo int
@@ -265,6 +335,24 @@ type failureClass struct {
 	// Current is the probability that this failure is still
 	// happening.
 	Current float64
+}
+
+func newFailureClass(revs []*Revision, failures []*failure) *failureClass {
+	fc := failureClass{
+		Revs:     revs,
+		Failures: failures,
+	}
+	times := []int{}
+	for i, f := range failures {
+		t := f.T
+		if i == 0 || times[len(times)-1] != t {
+			times = append(times, t)
+		}
+	}
+	fc.Test = FlakeTest(times)
+	fc.Latest = &fc.Test.All[0]
+	fc.Current = fc.Latest.StillHappening(len(revs) - 1)
+	return &fc
 }
 
 type currentSorter []*failureClass

@@ -130,20 +130,24 @@ func main() {
 	}
 
 	// Extract failures from logs.
-	failures, meta := extractFailures(revs)
+	failures := extractFailures(revs)
 
 	// Classify failures.
-	failureClasses := loganal.Classify(failures)
+	lfailures := make([]*loganal.Failure, len(failures))
+	for i, f := range failures {
+		lfailures[i] = f.Failure
+	}
+	failureClasses := loganal.Classify(lfailures)
 
 	// Gather failures from each class and perform flakiness
 	// tests.
 	classes := []*failureClass{}
 	for class, indexes := range failureClasses {
-		failures := []*failure{}
+		classFailures := []*failure{}
 		for _, fi := range indexes {
-			failures = append(failures, meta[fi])
+			classFailures = append(classFailures, failures[fi])
 		}
-		fc := newFailureClass(revs, failures)
+		fc := newFailureClass(revs, classFailures)
 		fc.Class = class
 
 		// Trim failure classes below thresholds. We leave out
@@ -169,12 +173,12 @@ func main() {
 	}
 }
 
-func extractFailures(revs []*Revision) ([]*loganal.Failure, []*failure) {
+func extractFailures(revs []*Revision) []*failure {
 	// Create failure extraction tasks.
 	type Task struct {
 		t     int
 		build *Build
-		res   chan []*loganal.Failure
+		res   chan []*failure
 	}
 	tasks := []Task{}
 	for t, rev := range revs {
@@ -182,7 +186,7 @@ func extractFailures(revs []*Revision) ([]*loganal.Failure, []*failure) {
 			if build.Status != BuildFailed {
 				continue
 			}
-			tasks = append(tasks, Task{t, build, make(chan []*loganal.Failure, 1)})
+			tasks = append(tasks, Task{t, build, make(chan []*failure, 1)})
 		}
 	}
 	todo := make(chan int)
@@ -205,11 +209,21 @@ func extractFailures(revs []*Revision) ([]*loganal.Failure, []*failure) {
 				}
 
 				// TODO: OS/Arch
-				failures, err := loganal.Extract(string(data), "", "")
+				lfailures, err := loganal.Extract(string(data), "", "")
 				if err != nil {
 					log.Printf("%s: %v\n", task.build.LogPath())
 					task.res <- nil
 				} else {
+					failures := make([]*failure, len(lfailures))
+					for i, lf := range lfailures {
+						failures[i] = &failure{
+							Failure:    lf,
+							T:          task.t,
+							CommitsAgo: len(revs) - task.t - 1,
+							Rev:        revs[task.t],
+							Build:      task.build,
+						}
+					}
 					task.res <- failures
 				}
 			}
@@ -217,8 +231,7 @@ func extractFailures(revs []*Revision) ([]*loganal.Failure, []*failure) {
 	}
 
 	// Gather results.
-	failures := []*loganal.Failure{}
-	meta := []*failure{}
+	failures := []*failure{}
 	for _, task := range tasks {
 		extracted := <-task.res
 
@@ -229,15 +242,9 @@ func extractFailures(revs []*Revision) ([]*loganal.Failure, []*failure) {
 			}
 
 			failures = append(failures, f)
-			meta = append(meta, &failure{
-				T:          task.t,
-				CommitsAgo: len(revs) - task.t - 1,
-				Rev:        revs[task.t],
-				Build:      task.build,
-			})
 		}
 	}
-	return failures, meta
+	return failures
 }
 
 func grepFailures(revs []*Revision, re *regexp.Regexp) []*failure {
@@ -305,6 +312,8 @@ func grepFailures(revs []*Revision, re *regexp.Regexp) []*failure {
 }
 
 type failure struct {
+	*loganal.Failure
+
 	T          int
 	CommitsAgo int
 	Rev        *Revision

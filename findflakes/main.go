@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/aclements/go-misc/findflakes/internal/loganal"
+	"github.com/aclements/go-misc/internal/loganal"
 )
 
 var (

@@ -7,6 +7,7 @@ package loganal
 import (
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Failure records a failure extracted from an all.bash log.
@@ -127,28 +128,30 @@ var (
 	miscFailed = regexp.MustCompile(`^.*Failed: (?:exit status|test failed)`)
 )
 
-// An ExtractCache can be used to speed up failure extraction from
-// multiple logs. It is *not* thread-safe.
-type ExtractCache struct {
-	goodLines map[string]bool
+// An extractCache speeds up failure extraction from multiple logs by
+// caching known lines. It is *not* thread-safe, so we track it in a
+// sync.Pool.
+type extractCache struct {
+	boringLines map[string]bool
 }
 
-// Extract parses the failures from all.bash log m. cache, if non-nil,
-// is used as a result cache to speed up failure extraction from
-// multiple logs.
-func Extract(m string, os, arch string, cache *ExtractCache) ([]*Failure, error) {
-	if cache == nil {
-		cache = &ExtractCache{}
-	}
-	if cache.goodLines == nil {
-		cache.goodLines = make(map[string]bool)
-	}
+var extractCachePool sync.Pool
 
+func init() {
+	extractCachePool.New = func() interface{} {
+		return &extractCache{make(map[string]bool)}
+	}
+}
+
+// Extract parses the failures from all.bash log m.
+func Extract(m string, os, arch string) ([]*Failure, error) {
 	fs := []*Failure{}
 	testingStarted := false
 	section := ""
 	sectionHeaderFailures := 0 // # failures at section start
 	unknown := []string{}
+	cache := extractCachePool.Get().(*extractCache)
+	defer extractCachePool.Put(cache)
 
 	// Canonicalize line endings. Note that some logs have a mix
 	// of line endings and some somehow have multiple \r's.
@@ -177,7 +180,7 @@ func Extract(m string, os, arch string, cache *ExtractCache) ([]*Failure, error)
 	for !matcher.done() {
 		// Check for a cached result.
 		line, nextLinePos := matcher.peekLine()
-		isGoodLine, cached := cache.goodLines[line]
+		isGoodLine, cached := cache.boringLines[line]
 
 		// Process the line.
 		isKnown := true
@@ -270,7 +273,7 @@ func Extract(m string, os, arch string, cache *ExtractCache) ([]*Failure, error)
 
 		case consume(goodLine):
 			// Ignore. Just cache and clear unknown.
-			cache.goodLines[line] = true
+			cache.boringLines[line] = true
 
 		case consume(testingUnknownFailed):
 			fs = append(fs, &Failure{
@@ -287,7 +290,7 @@ func Extract(m string, os, arch string, cache *ExtractCache) ([]*Failure, error)
 		default:
 			isKnown = false
 			unknown = append(unknown, line)
-			cache.goodLines[line] = false
+			cache.boringLines[line] = false
 			matcher.pos = nextLinePos
 		}
 

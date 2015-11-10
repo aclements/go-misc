@@ -14,6 +14,7 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/aclements/go-misc/findflakes/internal/loganal"
 )
@@ -173,12 +174,12 @@ func main() {
 	}
 }
 
-func extractFailures(revs []*Revision) []*failure {
-	// Create failure extraction tasks.
+func processFailureLogs(revs []*Revision, process func(build *Build, data []byte) []*failure) []*failure {
+	// Create log processing tasks.
 	type Task struct {
 		t     int
 		build *Build
-		res   chan []*failure
+		res   []*failure
 	}
 	tasks := []Task{}
 	for t, rev := range revs {
@@ -186,9 +187,11 @@ func extractFailures(revs []*Revision) []*failure {
 			if build.Status != BuildFailed {
 				continue
 			}
-			tasks = append(tasks, Task{t, build, make(chan []*failure, 1)})
+			tasks = append(tasks, Task{t, build, nil})
 		}
 	}
+
+	// Run failure processing.
 	todo := make(chan int)
 	go func() {
 		for i := range tasks {
@@ -196,9 +199,9 @@ func extractFailures(revs []*Revision) []*failure {
 		}
 		close(todo)
 	}()
-
-	// Run failure extraction.
+	var wg sync.WaitGroup
 	for i := 0; i < 4*runtime.GOMAXPROCS(-1); i++ {
+		wg.Add(1)
 		go func() {
 			for i := range todo {
 				task := tasks[i]
@@ -208,107 +211,64 @@ func extractFailures(revs []*Revision) []*failure {
 					log.Fatal(err)
 				}
 
-				// TODO: OS/Arch
-				lfailures, err := loganal.Extract(string(data), "", "")
-				if err != nil {
-					log.Printf("%s: %v\n", task.build.LogPath())
-					task.res <- nil
-				} else {
-					failures := make([]*failure, len(lfailures))
-					for i, lf := range lfailures {
-						failures[i] = &failure{
-							Failure:    lf,
-							T:          task.t,
-							CommitsAgo: len(revs) - task.t - 1,
-							Rev:        revs[task.t],
-							Build:      task.build,
-						}
-					}
-					task.res <- failures
+				failures := process(task.build, data)
+
+				// Fill build-related fields.
+				for _, failure := range failures {
+					failure.T = task.t
+					failure.CommitsAgo = len(revs) - task.t - 1
+					failure.Rev = revs[task.t]
+					failure.Build = task.build
 				}
+				tasks[i].res = failures
 			}
+			wg.Done()
 		}()
 	}
+	wg.Wait()
 
 	// Gather results.
 	failures := []*failure{}
 	for _, task := range tasks {
-		extracted := <-task.res
-
-		for _, f := range extracted {
-			// Ignore build failures.
-			if strings.Contains(f.Message, "build failed") {
-				continue
-			}
-
-			failures = append(failures, f)
-		}
+		failures = append(failures, task.res...)
 	}
 	return failures
 }
 
-func grepFailures(revs []*Revision, re *regexp.Regexp) []*failure {
-	// TODO: Unify better with extractFailures. Consider moving
-	// *loganal.Failure in to struct failure so the task is to
-	// produce a *failure in both functions.
+func extractFailures(revs []*Revision) []*failure {
+	return processFailureLogs(revs, func(build *Build, data []byte) []*failure {
+		// TODO: OS/Arch
+		lfailures, err := loganal.Extract(string(data), "", "")
+		if err != nil {
+			log.Printf("%s: %v\n", build.LogPath(), err)
+			return nil
+		}
+		if len(lfailures) == 0 {
+			return nil
+		}
 
-	// Create grep tasks.
-	type Task struct {
-		t     int
-		build *Build
-		res   chan *failure
-	}
-	tasks := []Task{}
-	for t, rev := range revs {
-		for _, build := range rev.Builds {
-			if build.Status != BuildFailed {
+		failures := make([]*failure, 0, len(lfailures))
+		for _, lf := range lfailures {
+			// Ignore build failures.
+			if strings.Contains(lf.Message, "build failed") {
 				continue
 			}
-			tasks = append(tasks, Task{t, build, make(chan *failure, 1)})
+
+			failures = append(failures, &failure{
+				Failure: lf,
+			})
 		}
-	}
-	todo := make(chan int)
-	go func() {
-		for i := range tasks {
-			todo <- i
+		return failures
+	})
+}
+
+func grepFailures(revs []*Revision, re *regexp.Regexp) []*failure {
+	return processFailureLogs(revs, func(build *Build, data []byte) []*failure {
+		if !re.Match(data) {
+			return nil
 		}
-		close(todo)
-	}()
-
-	// Run failure extraction.
-	for i := 0; i < 4*runtime.GOMAXPROCS(-1); i++ {
-		go func() {
-			for i := range todo {
-				task := tasks[i]
-
-				data, err := task.build.ReadLog()
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				if re.Match(data) {
-					task.res <- &failure{
-						T:          task.t,
-						CommitsAgo: len(revs) - task.t - 1,
-						Rev:        revs[task.t],
-						Build:      task.build,
-					}
-				} else {
-					task.res <- nil
-				}
-			}
-		}()
-	}
-
-	// Gather results.
-	failures := []*failure{}
-	for _, task := range tasks {
-		f := <-task.res
-		if f != nil {
-			failures = append(failures, f)
-		}
-	}
-	return failures
+		return []*failure{new(failure)}
+	})
 }
 
 type failure struct {

@@ -14,7 +14,14 @@ func round(x float64) int {
 }
 
 func pct(x float64) string {
-	return fmt.Sprintf("%d%%", round(100*x))
+	p := 100 * x
+	if p >= 9.5 {
+		return fmt.Sprintf("%.0f%%", p)
+	} else if p > 0.95 {
+		return fmt.Sprintf("%.1f%%", p)
+	} else {
+		return fmt.Sprintf("%.2f%%", p)
+	}
 }
 
 func printTextReport(w io.Writer, classes []*failureClass) {

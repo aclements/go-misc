@@ -16,6 +16,10 @@ type matcher struct {
 	pos    int
 	groups []string // match groups
 
+	// matchPos is the byte position of the beginning of the
+	// match in str.
+	matchPos int
+
 	// literals maps from literal strings to the index of the
 	// next occurrence of that string.
 	literals map[string]int
@@ -50,6 +54,7 @@ func (m *matcher) consume(r *regexp.Regexp) bool {
 			m.groups[i] = ""
 		}
 	}
+	m.matchPos = m.pos + idx[0]
 	m.pos += idx[1]
 	return true
 }

@@ -20,8 +20,13 @@ type Failure struct {
 	// testing.T failure, this will be "".
 	Test string
 
-	// Message is the failure message.
+	// Message is the summarized failure message. This will be one
+	// line of text.
 	Message string
+
+	// FullMessage is a substring of the log that captures the
+	// entire failure message. It may be many lines long.
+	FullMessage string
 
 	// Where indicates where this failure happened. If this is a
 	// regular test failure, this will be the file and line of the
@@ -203,9 +208,10 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 
 		case consume(testingFailed):
 			f := &Failure{
-				Test:    s[1],
-				Package: s[3],
-				Message: "unknown testing.T failure",
+				Test:        s[1],
+				Package:     s[3],
+				FullMessage: s[0],
+				Message:     "unknown testing.T failure",
 			}
 
 			// TODO: Can have multiple errors per FAIL:
@@ -223,8 +229,9 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 
 		case consume(gotestFailed):
 			fs = append(fs, &Failure{
-				Package: "test/" + s[2],
-				Message: firstLine(s[1]),
+				Package:     "test/" + s[2],
+				FullMessage: s[0],
+				Message:     firstLine(s[1]),
 			})
 
 		case consume(buildFailed):
@@ -232,26 +239,30 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 			// crash, but it's interleaved with other "ok"
 			// lines, so it's hard to find.
 			fs = append(fs, &Failure{
-				Message: "build failed",
-				Package: s[1],
+				FullMessage: s[0],
+				Message:     "build failed",
+				Package:     s[1],
 			})
 
 		case consume(timeoutPanic1):
 			fs = append(fs, &Failure{
-				Test:    testFromTraceback(s[1]),
-				Message: "test timed out",
-				Package: s[2],
+				Test:        testFromTraceback(s[1]),
+				FullMessage: s[0],
+				Message:     "test timed out",
+				Package:     s[2],
 			})
 
 		case consume(timeoutPanic2):
 			tb := strings.Join(unknown, "\n")
 			fs = append(fs, &Failure{
-				Test:    testFromTraceback(tb),
-				Message: "test timed out",
-				Package: s[1],
+				Test:        testFromTraceback(tb),
+				FullMessage: tb + "\n" + s[0],
+				Message:     "test timed out",
+				Package:     s[1],
 			})
 
 		case matcher.lineHasLiteral(runtimeLiterals...) && consume(runtimeFailed):
+			start := matcher.matchPos
 			msg := s[1]
 			pkg := "testing"
 			if strings.Contains(s[0], "fatal error:") {
@@ -260,15 +271,17 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 			traceback := consumeTraceback(matcher)
 			matcher.consume(runtimeFailedTrailer)
 			fs = append(fs, &Failure{
-				Package: pkg,
-				Message: msg,
-				Where:   panicWhere(traceback),
+				Package:     pkg,
+				FullMessage: matcher.str[start:matcher.pos],
+				Message:     msg,
+				Where:       panicWhere(traceback),
 			})
 
 		case consume(apiCheckerFailed):
 			fs = append(fs, &Failure{
-				Package: "API checker",
-				Message: s[1],
+				Package:     "API checker",
+				FullMessage: s[0],
+				Message:     s[1],
 			})
 
 		case consume(goodLine):
@@ -277,14 +290,16 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 
 		case consume(testingUnknownFailed):
 			fs = append(fs, &Failure{
-				Package: s[1],
-				Message: "unknown failure: " + firstBadLine(),
+				Package:     s[1],
+				FullMessage: s[0],
+				Message:     "unknown failure: " + firstBadLine(),
 			})
 
 		case len(fs) == sectionHeaderFailures && consume(miscFailed):
 			fs = append(fs, &Failure{
-				Package: section,
-				Message: "unknown failure: " + firstBadLine(),
+				Package:     section,
+				FullMessage: s[0],
+				Message:     "unknown failure: " + firstBadLine(),
 			})
 
 		default:
@@ -300,6 +315,7 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 		}
 	}
 
+	// TODO: FullMessages for these.
 	if len(fs) == 0 && strings.Contains(m, "no space left on device") {
 		fs = append(fs, &Failure{
 			Message: "build failed (no space left on device)",
@@ -384,6 +400,9 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 		if strings.HasPrefix(f.Package, "_/tmp/") {
 			f.Package = strings.SplitN(f.Package, "/", 4)[3]
 		}
+
+		// Trim trailing newlines from FullMessage.
+		f.FullMessage = strings.TrimRight(f.FullMessage, "\n")
 	}
 	return fs, nil
 }

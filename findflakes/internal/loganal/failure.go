@@ -12,9 +12,7 @@ import (
 // Failure records a failure extracted from an all.bash log.
 type Failure struct {
 	// Package is the Go package of this failure. In the case of a
-	// testing.T failure, this will be the package of the test. In
-	// the case of a runtime or test framework failure, this will
-	// be "".
+	// testing.T failure, this will be the package of the test.
 	Package string
 
 	// Test identifies the failed test function. If this is not a
@@ -107,11 +105,10 @@ var (
 	// cases a "fatal error:" can be preceded by a "panic:" if
 	// we've started the panic and then realize we can't (e.g.,
 	// sigpanic). Also gather up the "runtime:" prints preceding a
-	// throw. It's tricky to know when this is done so we try our
-	// best to match the traceback and consume common follow-up
-	// lines.
-	runtimeFailed   = regexp.MustCompile(`^((?:runtime:.*\n)*).*(?:panic: |fatal error: )(.*)\n(` + linesStar + `(?:\n|\t.*\n|goroutine .*:\n|runtime stack:\n|` + tbEntry + `|created by .*\n)+)(?:exit status.*\n)?(?:\*\*\* Test killed.*\n)?(?:` + failPkg + `)?`)
-	runtimeLiterals = []string{"runtime:", "panic:", "fatal error:"}
+	// throw.
+	runtimeFailed        = regexp.MustCompile(`^(?:runtime:.*\n)*.*(?:panic: |fatal error: )(.*)`)
+	runtimeLiterals      = []string{"runtime:", "panic:", "fatal error:"}
+	runtimeFailedTrailer = regexp.MustCompile(`^(?:exit status.*\n)?(?:\*\*\* Test killed.*\n)?(?:` + failPkg + `)?`)
 
 	// apiCheckerFailed matches an API checker failure.
 	apiCheckerFailed = regexp.MustCompile(`^Error running API checker: (.*)`)
@@ -223,13 +220,17 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 			})
 
 		case matcher.lineHasLiteral(runtimeLiterals...) && consume(runtimeFailed):
-			_ = s[1] // Runtime detail (currently unused)
+			msg := s[1]
+			pkg := "testing"
+			if strings.Contains(s[0], "fatal error:") {
+				pkg = "runtime"
+			}
+			traceback := consumeTraceback(matcher)
+			matcher.consume(runtimeFailedTrailer)
 			fs = append(fs, &Failure{
-				// TODO: "runtime" or "testing", as
-				// appropriate.
-				Package: "",
-				Message: s[2],
-				Where:   panicWhere(s[3]),
+				Package: pkg,
+				Message: msg,
+				Where:   panicWhere(traceback),
 			})
 
 		case consume(apiCheckerFailed):
@@ -359,6 +360,37 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+var (
+	tracebackStart = regexp.MustCompile(`^(goroutine [0-9]+.*:|runtime stack:)\n`)
+	tracebackEntry = regexp.MustCompile(`^` + tbEntry)
+)
+
+// consumeTraceback consumes a traceback from m.
+func consumeTraceback(m *matcher) string {
+	// Find the beginning of the traceback.
+	for !m.done() && !m.peek(tracebackStart) {
+		m.line()
+	}
+
+	start := m.pos
+loop:
+	for !m.done() {
+		switch {
+		case m.hasPrefix("\n") || m.hasPrefix("\t") ||
+			m.hasPrefix("goroutine ") || m.hasPrefix("runtime stack:") ||
+			m.hasPrefix("created by "):
+			m.line()
+
+		case m.consume(tracebackEntry):
+			// Do nothing.
+
+		default:
+			break loop
+		}
+	}
+	return m.str[start:m.pos]
 }
 
 var (

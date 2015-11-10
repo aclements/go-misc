@@ -54,6 +54,11 @@ func (m *matcher) consume(r *regexp.Regexp) bool {
 	return true
 }
 
+// peek returns whether r matches the remaining text.
+func (m *matcher) peek(r *regexp.Regexp) bool {
+	return r.MatchString(m.str[m.pos:])
+}
+
 // lineHasLiteral returns whether any of literals is found before the
 // end of the current line.
 func (m *matcher) lineHasLiteral(literals ...string) bool {
@@ -86,6 +91,11 @@ func (m *matcher) lineHasLiteral(literals ...string) bool {
 		}
 	}
 	return true
+}
+
+// hasPrefix returns whether the remaining text begins with s.
+func (m *matcher) hasPrefix(s string) bool {
+	return strings.HasPrefix(m.str[m.pos:], s)
 }
 
 // line consumes and returns the remainder of the current line, not

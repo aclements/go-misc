@@ -111,3 +111,14 @@ func (m *matcher) line() string {
 		return line
 	}
 }
+
+// peekLine returns the remainder of the current line, not including
+// the line terminator, and the position of the beginning of the next
+// line.
+func (m *matcher) peekLine() (string, int) {
+	if i := strings.Index(m.str[m.pos:], "\n"); i >= 0 {
+		return m.str[m.pos : m.pos+i], m.pos + i + 1
+	} else {
+		return m.str[m.pos:], len(m.str)
+	}
+}

@@ -127,8 +127,23 @@ var (
 	miscFailed = regexp.MustCompile(`^.*Failed: (?:exit status|test failed)`)
 )
 
-// Extract parses the failures from all.bash log m.
-func Extract(m string, os, arch string) ([]*Failure, error) {
+// An ExtractCache can be used to speed up failure extraction from
+// multiple logs. It is *not* thread-safe.
+type ExtractCache struct {
+	goodLines map[string]bool
+}
+
+// Extract parses the failures from all.bash log m. cache, if non-nil,
+// is used as a result cache to speed up failure extraction from
+// multiple logs.
+func Extract(m string, os, arch string, cache *ExtractCache) ([]*Failure, error) {
+	if cache == nil {
+		cache = &ExtractCache{}
+	}
+	if cache.goodLines == nil {
+		cache.goodLines = make(map[string]bool)
+	}
+
 	fs := []*Failure{}
 	testingStarted := false
 	section := ""
@@ -160,8 +175,22 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 	}
 
 	for !matcher.done() {
+		// Check for a cached result.
+		line, nextLinePos := matcher.peekLine()
+		isGoodLine, cached := cache.goodLines[line]
+
+		// Process the line.
 		isKnown := true
 		switch {
+		case cached:
+			matcher.pos = nextLinePos
+			if !isGoodLine {
+				// This line is known to not match any
+				// regexps. Follow the default case.
+				isKnown = false
+				unknown = append(unknown, line)
+			}
+
 		case consume(testingHeader):
 			testingStarted = true
 
@@ -240,7 +269,8 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 			})
 
 		case consume(goodLine):
-			// Ignore. Just clear unknown.
+			// Ignore. Just cache and clear unknown.
+			cache.goodLines[line] = true
 
 		case consume(testingUnknownFailed):
 			fs = append(fs, &Failure{
@@ -256,7 +286,9 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 
 		default:
 			isKnown = false
-			unknown = append(unknown, matcher.line())
+			unknown = append(unknown, line)
+			cache.goodLines[line] = false
+			matcher.pos = nextLinePos
 		}
 
 		// Clear unknown lines on any known line.

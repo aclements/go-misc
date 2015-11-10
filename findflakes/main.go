@@ -190,6 +190,7 @@ func extractFailures(revs []*Revision) ([]*loganal.Failure, []*failure) {
 	// Run failure extraction.
 	for i := 0; i < 4*runtime.GOMAXPROCS(-1); i++ {
 		go func() {
+			cache := new(loganal.ExtractCache)
 			for i := range todo {
 				task := tasks[i]
 
@@ -199,7 +200,7 @@ func extractFailures(revs []*Revision) ([]*loganal.Failure, []*failure) {
 				}
 
 				// TODO: OS/Arch
-				failures, err := loganal.Extract(string(data), "", "")
+				failures, err := loganal.Extract(string(data), "", "", cache)
 				if err != nil {
 					log.Printf("%s: %v\n", task.build.LogPath())
 					task.res <- nil

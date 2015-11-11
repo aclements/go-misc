@@ -49,7 +49,7 @@ func main() {
 	// Validate flags.
 	if *flagRegexp != "" {
 		var err error
-		re, err = regexp.Compile(*flagRegexp)
+		re, err = regexp.Compile("(?m)" + *flagRegexp)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bad regexp: %v\n", err)
 			os.Exit(2)

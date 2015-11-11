@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -23,8 +24,6 @@ import (
 // TODO: Option to print Markdown-friendly output for GitHub.
 
 // TODO: Option to print failure summary versus full failure message.
-
-// TODO: Recurse when given a directory.
 
 // TODO: Option to only show failures matching regexp? Currently we
 // show all failures in files matching regexp, but sometimes you want
@@ -54,13 +53,25 @@ func main() {
 	// Process files
 	status := 1
 	for _, path := range flag.Args() {
-		found, err := process(path)
-		if err != nil {
-			status = 2
-			fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
-		} else if found && status == 1 {
-			status = 0
-		}
+		filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				status = 2
+				fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
+				return nil
+			}
+			if info.IsDir() {
+				return nil
+			}
+
+			found, err := process(path)
+			if err != nil {
+				status = 2
+				fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
+			} else if found && status == 1 {
+				status = 0
+			}
+			return nil
+		})
 	}
 	os.Exit(status)
 }

@@ -64,9 +64,12 @@ func Classify(fs []*Failure) map[Failure][]int {
 	// Map maximally canonicalized failures to input indexes.
 	canon := map[Failure][]int{}
 	for i, f := range fs {
-		key := *f
-		key.Message = f.canonicalMessage()
-		key.OS, key.Arch = "", ""
+		key := Failure{
+			Package: f.Package,
+			Test:    f.Test,
+			Message: f.canonicalMessage(),
+			Where:   f.Where, // TODO: Omit line number
+		}
 
 		canon[key] = append(canon[key], i)
 	}

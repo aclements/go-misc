@@ -5,7 +5,9 @@
 package loganal
 
 import (
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -28,13 +30,19 @@ type Failure struct {
 	// entire failure message. It may be many lines long.
 	FullMessage string
 
-	// Where indicates where this failure happened. If this is a
-	// regular test failure, this will be the file and line of the
-	// last testing.T.Errorf call. If this is a panic, this will
-	// be the fully qualified name of the function where this
-	// failure happened (this helps distinguish between generic
-	// errors like "out of bounds").
-	Where string
+	// Function is the fully qualified name of the function where
+	// this failure happened, if known. This helps distinguish
+	// between generic errors like "out of bounds" and is more
+	// stable for matching errors than file/line.
+	Function string
+
+	// File is the source file where this failure happened, if
+	// known.
+	File string
+
+	// Line is the source line where this failure happened, if
+	// known.
+	Line int
 
 	// OS and Arch are the GOOS and GOARCH of this failure.
 	OS, Arch string
@@ -45,11 +53,18 @@ func (f Failure) String() string {
 	if f.Test != "" {
 		s += "." + f.Test
 	}
-	if f.Where != "" {
+	if f.Function != "" || f.File != "" {
 		if s != "" {
 			s += " "
 		}
-		s += "at " + f.Where
+		if f.Function != "" {
+			s += "at " + f.Function
+		} else {
+			s += "at " + f.File
+			if f.Line != 0 {
+				s += fmt.Sprintf(":%d", f.Line)
+			}
+		}
 	}
 	if s != "" {
 		s += ": "
@@ -79,7 +94,7 @@ var (
 
 	// testingError matches the file name and message of the last
 	// T.Error in a testingFailed log.
-	testingError = regexp.MustCompile(`(?:.*\n)*\t([^:]+:[0-9]+): (.*)\n`)
+	testingError = regexp.MustCompile(`(?:.*\n)*\t([^:]+):([0-9]+): (.*)\n`)
 
 	// testingPanic matches a recovered panic in a testingFailed
 	// log.
@@ -103,8 +118,9 @@ var (
 
 	// tbEntry is a regexp string that matches a single
 	// function/line number entry in a traceback. Group 1 matches
-	// the fully qualified function name.
-	tbEntry = `(\S+)\(.*\)\n\t.*:[0-9]+ .*\n`
+	// the fully qualified function name. Groups 2 and 3 match the
+	// file name and line number.
+	tbEntry = `(\S+)\(.*\)\n\t(.*):([0-9]+) .*\n`
 
 	// runtimeFailed matches a runtime throw or testing package
 	// panic. Matching the panic is fairly loose because in some
@@ -220,9 +236,10 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 			sError := testingError.FindStringSubmatch(s[2])
 			sPanic := testingPanic.FindStringSubmatch(s[2])
 			if sError != nil {
-				f.Where, f.Message = sError[1], sError[2]
+				f.File, f.Line, f.Message = sError[1], atoi(sError[2]), sError[3]
 			} else if sPanic != nil {
-				f.Where, f.Message = panicWhere(s[2]), sPanic[1]
+				f.Function, f.File, f.Line = panicWhere(s[2])
+				f.Message = sPanic[1]
 			}
 
 			fs = append(fs, f)
@@ -270,11 +287,14 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 			}
 			traceback := consumeTraceback(matcher)
 			matcher.consume(runtimeFailedTrailer)
+			fn, file, line := panicWhere(traceback)
 			fs = append(fs, &Failure{
 				Package:     pkg,
 				FullMessage: matcher.str[start:matcher.pos],
 				Message:     msg,
-				Where:       panicWhere(traceback),
+				Function:    fn,
+				File:        file,
+				Line:        line,
 			})
 
 		case consume(apiCheckerFailed):
@@ -351,8 +371,10 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 	maxCount := 0
 	for _, f := range fs {
 		key := Failure{
-			Message: f.canonicalMessage(),
-			Where:   f.Where,
+			Message:  f.canonicalMessage(),
+			Function: f.Function,
+			File:     f.File,
+			Line:     f.Line,
 		}
 
 		d := msgDedup[key]
@@ -405,6 +427,14 @@ func Extract(m string, os, arch string) ([]*Failure, error) {
 		f.FullMessage = strings.TrimRight(f.FullMessage, "\n")
 	}
 	return fs, nil
+}
+
+func atoi(s string) int {
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		panic("expected number, got " + s)
+	}
+	return v
 }
 
 // firstLine returns the first line from s, not including the line
@@ -466,9 +496,9 @@ func testFromTraceback(tb string) string {
 	return s[1]
 }
 
-// panicWhere attempts to return the fully qualified name of the
-// panicking function in traceback tb.
-func panicWhere(tb string) string {
+// panicWhere attempts to return the fully qualified name, source
+// file, and line number of the panicking function in traceback tb.
+func panicWhere(tb string) (fn string, file string, line int) {
 	m := matcher{str: tb}
 	for m.consume(panicWhereRe) {
 		fn := m.groups[1]
@@ -477,7 +507,7 @@ func panicWhere(tb string) string {
 		if strings.HasPrefix(fn, "runtime.panic") || fn == "runtime.throw" || fn == "runtime.sigpanic" {
 			continue
 		}
-		return fn
+		return fn, m.groups[2], atoi(m.groups[3])
 	}
-	return ""
+	return "", "", 0
 }

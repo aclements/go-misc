@@ -64,11 +64,13 @@ func Classify(fs []*Failure) map[Failure][]int {
 	// Map maximally canonicalized failures to input indexes.
 	canon := map[Failure][]int{}
 	for i, f := range fs {
+		// TODO: Match up nearby line numbers?
 		key := Failure{
-			Package: f.Package,
-			Test:    f.Test,
-			Message: f.canonicalMessage(),
-			Where:   f.Where, // TODO: Omit line number
+			Package:  f.Package,
+			Test:     f.Test,
+			Message:  f.canonicalMessage(),
+			Function: f.Function,
+			File:     f.File,
 		}
 
 		canon[key] = append(canon[key], i)
@@ -83,7 +85,7 @@ func Classify(fs []*Failure) map[Failure][]int {
 			continue
 		}
 
-		// Does the message need canonicalization?
+		// Does the message need de-canonicalization?
 		if key.Message != fs[class[0]].Message {
 			fields := fs[class[0]].canonicalFields()
 			for _, fi := range class[1:] {
@@ -97,9 +99,12 @@ func Classify(fs []*Failure) map[Failure][]int {
 			key.Message = strings.Join(fields, "")
 		}
 
-		// Canonicalize OS and Arch.
-		os, arch := fs[class[0]].OS, fs[class[0]].Arch
+		// De-canonicalize Line, OS, and Arch.
+		line, os, arch := fs[class[0]].Line, fs[class[0]].OS, fs[class[0]].Arch
 		for _, fi := range class[1:] {
+			if fs[fi].Line != line {
+				line = 0
+			}
 			if fs[fi].OS != os {
 				os = ""
 			}
@@ -107,7 +112,7 @@ func Classify(fs []*Failure) map[Failure][]int {
 				arch = ""
 			}
 		}
-		key.OS, key.Arch = os, arch
+		key.Line, key.OS, key.Arch = line, os, arch
 
 		out[key] = class
 	}

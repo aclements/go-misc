@@ -16,9 +16,8 @@ import (
 	"github.com/aclements/go-misc/internal/loganal"
 )
 
-// TODO: Search a set of log files or saved builder logs. If searching
-// saved builder logs, optionally print to builder URLs instead of
-// local file names.
+// TODO: If searching dashboard logs, optionally print to builder URLs
+// instead of local file names.
 
 // TODO: Optionally extract failures and show only those.
 
@@ -38,6 +37,8 @@ var (
 	// TODO: Allow mulitple -e's like grep.
 	flagRegexp = flag.String("e", "", "show files matching `regexp`")
 	re         *regexp.Regexp
+
+	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
 )
 
 func main() {
@@ -45,6 +46,7 @@ func main() {
 	// logs and have it extract the failures.
 	flag.Parse()
 
+	// Validate flags.
 	if *flagRegexp != "" {
 		var err error
 		re, err = regexp.Compile(*flagRegexp)
@@ -53,21 +55,41 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	if *flagDashboard && flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "-dashboard and paths are incompatible\n")
+		os.Exit(2)
+	}
+
+	// Gather paths.
+	var paths []string
+	var stripDir string
+	if *flagDashboard {
+		revDir := filepath.Join(xdgCacheDir(), "fetchlogs", "rev")
+		paths = []string{revDir}
+		stripDir = revDir + "/"
+	} else {
+		paths = flag.Args()
+	}
 
 	// Process files
 	status := 1
-	for _, path := range flag.Args() {
+	for _, path := range paths {
 		filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				status = 2
 				fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
 				return nil
 			}
-			if info.IsDir() {
+			if info.IsDir() || strings.HasPrefix(filepath.Base(path), ".") {
 				return nil
 			}
 
-			found, err := process(path)
+			nicePath := path
+			if stripDir != "" && strings.HasPrefix(path, stripDir) {
+				nicePath = path[len(stripDir):]
+			}
+
+			found, err := process(path, nicePath)
 			if err != nil {
 				status = 2
 				fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
@@ -80,7 +102,7 @@ func main() {
 	os.Exit(status)
 }
 
-func process(path string) (found bool, err error) {
+func process(path, nicePath string) (found bool, err error) {
 	// TODO: Use streaming if possible.
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
@@ -104,13 +126,7 @@ func process(path string) (found bool, err error) {
 		if msg == "" {
 			msg = failure.Message
 		}
-		fmt.Printf("%s:\n%s\n\n", path, msg)
-		continue
-		lines := strings.Split(msg, "\n")
-		for _, line := range lines {
-			fmt.Printf("%s: %s\n", path, line)
-		}
-		fmt.Println()
+		fmt.Printf("%s:\n%s\n\n", nicePath, msg)
 	}
 	return true, nil
 }

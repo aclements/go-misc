@@ -39,11 +39,10 @@ func printTextFlakeReport(w io.Writer, fc *failureClass) {
 
 	fmt.Fprintf(w, "First observed %s (%d commits ago)\n", fc.Revs[fc.Latest.First], len(fc.Revs)-fc.Latest.First-1)
 	fmt.Fprintf(w, "Last observed  %s (%d commits ago)\n", fc.Revs[fc.Latest.Last], len(fc.Revs)-fc.Latest.Last-1)
-	fmt.Fprintf(w, "%s chance failure is still happening\n", pct(fc.Current))
-
 	if fc.Latest.First == fc.Latest.Last {
 		fmt.Fprintf(w, "Isolated failure\n")
 	} else {
+		fmt.Fprintf(w, "%s chance failure is still happening\n", pct(fc.Current))
 		fmt.Fprintf(w, "%s failure probability (%d of %d commits)\n", pct(fc.Latest.FailureProbability), fc.Latest.Failures, fc.Latest.Last-fc.Latest.First+1)
 		fmt.Fprintf(w, "Likely culprits:\n")
 		for _, c := range fc.Latest.Culprits(0.9, 10) {

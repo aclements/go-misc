@@ -89,8 +89,10 @@ var (
 	sectionHeader = regexp.MustCompile(`^##### (.*)`)
 
 	// testingFailed matches a testing.T failure. This may be a
-	// T.Error or a recovered panic.
-	testingFailed = regexp.MustCompile(`^--- FAIL: (\S+).*\n(` + linesStar + `)` + failPkg)
+	// T.Error or a recovered panic. There was a time when the
+	// test name included GOMAXPROCS (like how benchmark names
+	// do), so we strip that out.
+	testingFailed = regexp.MustCompile(`^--- FAIL: ([^-\s]+).*\n(` + linesStar + `)` + failPkg)
 
 	// testingError matches the file name and message of the last
 	// T.Error in a testingFailed log.

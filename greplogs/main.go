@@ -24,9 +24,16 @@ import (
 
 // TODO: Option to print failure summary versus full failure message.
 
+// TODO: Recurse when given a directory.
+
+// TODO: Option to only show failures matching regexp? Currently we
+// show all failures in files matching regexp, but sometimes you want
+// to search the failures themselves. We could pre-filter the files by
+// regexp, extract failures, and then match the failure messages.
+
 var (
 	// TODO: Allow mulitple -e's like grep.
-	flagRegexp = flag.String("-e", "", "show files matching `regexp`")
+	flagRegexp = flag.String("e", "", "show files matching `regexp`")
 	re         *regexp.Regexp
 )
 

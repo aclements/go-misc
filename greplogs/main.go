@@ -31,12 +31,13 @@ import (
 // TODO: Option to only show failures matching regexp? Currently we
 // show all failures in files matching regexp, but sometimes you want
 // to search the failures themselves. We could pre-filter the files by
-// regexp, extract failures, and then match the failure messages.
+// regexp, extract failures, and then match the failure messages. The
+// current behavior is particularly confusing since we only show the
+// failures, which may not contain the matched regexps.
 
 var (
-	// TODO: Allow mulitple -e's like grep.
-	flagRegexp = flag.String("e", "", "show files matching `regexp`")
-	re         *regexp.Regexp
+	flagRegexpList stringList
+	regexpList     []*regexp.Regexp
 
 	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
 )
@@ -44,16 +45,17 @@ var (
 func main() {
 	// XXX What I want right now is just to point it at a bunch of
 	// logs and have it extract the failures.
+	flag.Var(&flagRegexpList, "e", "show files matching `regexp`; if provided multiple times, files must match all regexps")
 	flag.Parse()
 
 	// Validate flags.
-	if *flagRegexp != "" {
-		var err error
-		re, err = regexp.Compile("(?m)" + *flagRegexp)
+	for _, flagRegexp := range flagRegexpList {
+		re, err := regexp.Compile("(?m)" + flagRegexp)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "bad regexp: %v\n", err)
+			fmt.Fprintf(os.Stderr, "bad regexp %v: %v\n", flagRegexp, err)
 			os.Exit(2)
 		}
+		regexpList = append(regexpList, re)
 	}
 	if *flagDashboard && flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "-dashboard and paths are incompatible\n")
@@ -110,8 +112,10 @@ func process(path, nicePath string) (found bool, err error) {
 	}
 
 	// Check regexp match.
-	if re != nil && !re.Match(data) {
-		return false, nil
+	for _, re := range regexpList {
+		if !re.Match(data) {
+			return false, nil
+		}
 	}
 
 	// Extract failures.

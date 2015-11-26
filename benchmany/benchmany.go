@@ -8,11 +8,12 @@
 //
 //	benchmany [-C git-dir] [-n iterations] <revision range>
 //
-// For each revision in <revision range>, benchmany runs the Go
-// testing package benchmarks in the current directory <iterations>
-// times and writes the benchmark results to log.<commit hash>. For
-// the spelling of a revision range, see "SPECIFYING RANGES" in
-// gitrevisions(7).
+// For each revision in <revision range>, benchmany runs the
+// benchmarks in the current directory <iterations> times and writes
+// the benchmark results to log.<commit hash>. Benchmarks may be Go
+// testing framework benchmarks or benchmarks from
+// golang.org/x/benchmarks. For the spelling of a revision range, see
+// "SPECIFYING RANGES" in gitrevisions(7).
 //
 // Benchmany will check out each revision in git-dir. The current
 // directory may or may not be in the same git repository as git-dir.
@@ -56,6 +57,7 @@ type commitInfo struct {
 var (
 	gitDir     string
 	topLevel   string
+	benchFlags string
 	iterations int
 	dryRun     bool
 )
@@ -66,9 +68,6 @@ var (
 const maxFails = 5
 
 func main() {
-	// TODO: Support running x/benchmarks instead of/in addition
-	// to regular benchmarks.
-
 	// TODO: Check CPU performance governor before each benchmark.
 
 	// TODO: Support both sequential and randomized mode.
@@ -84,6 +83,7 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.StringVar(&gitDir, "C", "", "run git in `dir`")
+	flag.StringVar(&benchFlags, "benchflags", "", "pass `flags` to benchmark")
 	flag.IntVar(&iterations, "n", 5, "run each benchmark `N` times")
 	flag.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
 	flag.Parse()
@@ -285,6 +285,11 @@ func pickCommit(commits []*commitInfo) *commitInfo {
 // commit.fails, and commit.buildFailed as appropriate and writes to
 // the commit log to record the outcome.
 func runBenchmark(commit *commitInfo) {
+	isXBenchmark := false
+	if abs, _ := os.Getwd(); strings.Contains(abs, "golang.org/x/benchmarks/") {
+		isXBenchmark = true
+	}
+
 	// Build the benchmark if necessary.
 	if !exists(commit.binPath) {
 		status(commit, "building")
@@ -319,7 +324,11 @@ func runBenchmark(commit *commitInfo) {
 			}
 		}
 
-		buildCmd = append(buildCmd, "test", "-c", "-o", commit.binPath)
+		if isXBenchmark {
+			buildCmd = append(buildCmd, "build")
+		} else {
+			buildCmd = append(buildCmd, "test", "-c", "-o", commit.binPath)
+		}
 		cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
 		if dryRun {
 			dryPrint(cmd)
@@ -334,7 +343,14 @@ func runBenchmark(commit *commitInfo) {
 
 	// Run the benchmark.
 	status(commit, "running")
-	cmd := exec.Command("./"+commit.binPath, "-test.run", "NONE", "-test.bench", ".")
+	var args []string
+	if isXBenchmark {
+		args = []string{}
+	} else {
+		args = []string{"-test.run", "NONE", "-test.bench", "."}
+	}
+	args = append(args, strings.Fields(benchFlags)...)
+	cmd := exec.Command("./"+commit.binPath, args...)
 	if dryRun {
 		dryPrint(cmd)
 		commit.count++

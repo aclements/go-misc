@@ -25,6 +25,7 @@ import (
 var (
 	verbose = flag.Bool("v", false, "print commands being run")
 	verDir  = flag.String("dir", defaultVerDir(), "`directory` of saved Go roots")
+	noDedup = flag.Bool("no-dedup", false, "disable deduplication of saved trees")
 )
 
 // TODO: Is this is sane default? If your working directory is another
@@ -283,7 +284,7 @@ func doList() {
 	baseMap := make(map[string]*saveInfo)
 	bases := []*saveInfo{}
 	for _, file := range files {
-		if !file.IsDir() {
+		if !file.IsDir() || file.Name() == "_dedup" {
 			continue
 		}
 		info := &saveInfo{base: file.Name(), names: []string{}}
@@ -340,25 +341,48 @@ func doRun(name string, cmd []string) {
 }
 
 func cp(src, dst string) {
-	if *verbose {
-		fmt.Printf("cp %s %s\n", src, dst)
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0777); err != nil {
-		log.Fatal(err)
-	}
 	data, err := ioutil.ReadFile(src)
 	if err != nil {
 		log.Fatal(err)
 	}
-	st, err := os.Stat(src)
-	if err != nil {
-		log.Fatal(err)
+
+	writeFile, xdst := true, dst
+	if !*noDedup {
+		hash := fmt.Sprintf("%x", sha1.Sum(data))
+		xdst = filepath.Join(*verDir, "_dedup", hash[:2], hash[2:])
+		if _, err := os.Stat(xdst); err == nil {
+			writeFile = false
+		}
 	}
-	if err := ioutil.WriteFile(dst, data, st.Mode()); err != nil {
-		log.Fatal(err)
+	if writeFile {
+		if *verbose {
+			fmt.Printf("cp %s %s\n", src, xdst)
+		}
+		st, err := os.Stat(src)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(xdst), 0777); err != nil {
+			log.Fatal(err)
+		}
+		if err := ioutil.WriteFile(xdst, data, st.Mode()); err != nil {
+			log.Fatal(err)
+		}
+		if err := os.Chtimes(xdst, st.ModTime(), st.ModTime()); err != nil {
+			log.Fatal(err)
+		}
 	}
-	if err := os.Chtimes(dst, st.ModTime(), st.ModTime()); err != nil {
-		log.Fatal(err)
+
+	if dst != xdst {
+		if *verbose {
+			fmt.Printf("ln %s %s\n", xdst, dst)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0777); err != nil {
+			log.Fatal(err)
+		}
+		if err := os.Link(xdst, dst); err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 

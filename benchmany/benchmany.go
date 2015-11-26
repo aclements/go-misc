@@ -168,6 +168,12 @@ func (c *commitInfo) runnable() bool {
 	return !c.buildFailed && c.fails < maxFails && c.count < iterations
 }
 
+// partial returns true if this commit is both runnable and already
+// has some runs.
+func (c *commitInfo) partial() bool {
+	return c.count > 0 && c.runnable()
+}
+
 // writeLog appends msg to c's log file.
 func (c *commitInfo) writeLog(msg []byte) {
 	logFile, err := os.OpenFile(c.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -190,16 +196,25 @@ func pickCommit(commits []*commitInfo) *commitInfo {
 	// commit so as to spread out the commits we have.
 	weights := make([]int, len(commits))
 	totalWeight := 0
-	pickExisting := func() {
-		// Pick an existing commit.
-		for i, commit := range commits {
-			if commit.count > 0 && commit.runnable() {
-				weights[i] = 1
-				totalWeight++
-			}
+
+	nPartial := 0
+	for _, commit := range commits {
+		if commit.partial() {
+			nPartial++
 		}
 	}
-	pickNew := func() {
+	if nPartial >= len(commits)/10 {
+		// Limit the number of partially completed revisions
+		// to 10% by only choosing a partial commit in this
+		// case.
+		for i, commit := range commits {
+			if commit.partial() {
+				// Bias toward commits that are
+				// further from done.
+				weights[i] = iterations - commit.count
+			}
+		}
+	} else {
 		// Pick a new commit weighted by its distance from a
 		// commit that we already have.
 		leftDistance, rightDistance := len(commits), len(commits)
@@ -239,23 +254,10 @@ func pickCommit(commits []*commitInfo) *commitInfo {
 				weights[i] = 0
 			}
 		}
-
-		for _, w := range weights {
-			totalWeight += w
-		}
 	}
-	// 75% chance that we increase the iteration count of a commit
-	// we already have, 25% chance that we pick a new one.
-	if rand.Float64() < 0.75 {
-		pickExisting()
-		if totalWeight == 0 {
-			pickNew()
-		}
-	} else {
-		pickNew()
-		if totalWeight == 0 {
-			pickExisting()
-		}
+
+	for _, w := range weights {
+		totalWeight += w
 	}
 	if totalWeight == 0 {
 		return nil

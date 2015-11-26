@@ -15,10 +15,12 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -59,6 +61,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] run name command... - run <command> using build <name>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] clean - clean the deduplication cache", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nFlags:\n")
 		flag.PrintDefaults()
 	}
@@ -142,6 +145,13 @@ func main() {
 			os.Exit(2)
 		}
 		doRun(flag.Arg(1), flag.Args()[2:])
+
+	case "clean":
+		if flag.NArg() > 1 {
+			flag.Usage()
+			os.Exit(2)
+		}
+		doClean()
 
 	default:
 		flag.Usage()
@@ -338,6 +348,35 @@ func doRun(name string, cmd []string) {
 		fmt.Printf("command failed: %s\n", err)
 		os.Exit(1)
 	}
+}
+
+var goodDedupPath = regexp.MustCompile("/[0-9a-f]{2}/[0-9a-f]{38}$")
+
+func doClean() {
+	removed := 0
+	filepath.Walk(filepath.Join(*verDir, "_dedup"), func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
+		if st, err := os.Stat(path); err == nil {
+			st, ok := st.Sys().(*syscall.Stat_t)
+			if !ok || st.Nlink != 1 {
+				return nil
+			}
+			if !goodDedupPath.MatchString(path) {
+				// Be paranoid about removing files.
+				log.Printf("unexpected file in dedup cache: %s\n", path)
+				return nil
+			}
+			if err := os.Remove(path); err != nil {
+				log.Printf("failed to remove %s: %v", path, err)
+			} else {
+				removed++
+			}
+		}
+		return nil
+	})
+	fmt.Printf("removed %d unused file(s)\n", removed)
 }
 
 func cp(src, dst string) {

@@ -59,6 +59,7 @@ var (
 	topLevel   string
 	benchFlags string
 	iterations int
+	goverSave  bool
 	dryRun     bool
 )
 
@@ -85,6 +86,7 @@ func main() {
 	flag.StringVar(&gitDir, "C", "", "run git in `dir`")
 	flag.StringVar(&benchFlags, "benchflags", "", "pass `flags` to benchmark")
 	flag.IntVar(&iterations, "n", 5, "run each benchmark `N` times")
+	flag.BoolVar(&goverSave, "gover-save", false, "save toolchain builds with gover")
 	flag.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
 	flag.Parse()
 	if flag.NArg() < 1 {
@@ -317,6 +319,9 @@ func runBenchmark(commit *commitInfo) {
 					commit.writeLog([]byte("BUILD FAILED:\n" + detail))
 					return
 				}
+				if goverSave && doGoverSave() == nil {
+					commit.gover = true
+				}
 				buildCmd = []string{filepath.Join(topLevel, "bin", "go")}
 			} else {
 				// Assume go is in $PATH.
@@ -369,6 +374,21 @@ func runBenchmark(commit *commitInfo) {
 
 	// Write the benchmark output.
 	commit.writeLog(out)
+}
+
+func doGoverSave() error {
+	cmd := exec.Command("gover", "save")
+	cmd.Env = append([]string{"GOROOT=" + topLevel}, os.Environ()...)
+	if dryRun {
+		dryPrint(cmd)
+		return nil
+	} else {
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gover save failed: %s:\n%s", err, indent(string(out)))
+		}
+		return err
+	}
 }
 
 // status prints a status message.

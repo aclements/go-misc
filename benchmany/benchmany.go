@@ -55,7 +55,9 @@ type commitInfo struct {
 
 var (
 	gitDir     string
+	topLevel   string
 	iterations int
+	dryRun     bool
 )
 
 // maxFails is the maximum number of benchmark run failures to
@@ -83,6 +85,7 @@ func main() {
 	}
 	flag.StringVar(&gitDir, "C", "", "run git in `dir`")
 	flag.IntVar(&iterations, "n", 5, "run each benchmark `N` times")
+	flag.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
 	flag.Parse()
 	if flag.NArg() < 1 {
 		flag.Usage()
@@ -99,6 +102,9 @@ func main() {
 		fs := strings.SplitN(cached, " ", 2)
 		cachedHashes[fs[0]] = true
 	}
+
+	// Get other git information.
+	topLevel = trimNL(git("rev-parse", "--show-toplevel"))
 
 	// Load current benchmark state.
 	var commits []*commitInfo
@@ -294,12 +300,12 @@ func runBenchmark(commit *commitInfo) {
 			// make.bash. Otherwise, we assume that go
 			// test -c will build the necessary
 			// dependencies.
-			topLevel := trimNL(git("rev-parse", "--show-toplevel"))
 			if exists(filepath.Join(topLevel, "src", "make.bash")) {
 				cmd := exec.Command("./make.bash")
 				cmd.Dir = filepath.Join(topLevel, "src")
-				out, err := cmd.CombinedOutput()
-				if err != nil {
+				if dryRun {
+					dryPrint(cmd)
+				} else if out, err := cmd.CombinedOutput(); err != nil {
 					detail := indent(string(out)) + indent(err.Error())
 					fmt.Fprintf(os.Stderr, "failed to build toolchain at %s:\n%s", commit.hash, detail)
 					commit.buildFailed = true
@@ -315,8 +321,9 @@ func runBenchmark(commit *commitInfo) {
 
 		buildCmd = append(buildCmd, "test", "-c", "-o", commit.binPath)
 		cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
+		if dryRun {
+			dryPrint(cmd)
+		} else if out, err := cmd.CombinedOutput(); err != nil {
 			detail := indent(string(out)) + indent(err.Error())
 			fmt.Fprintf(os.Stderr, "failed to build tests at %s:\n%s", commit.hash, detail)
 			commit.buildFailed = true
@@ -328,6 +335,11 @@ func runBenchmark(commit *commitInfo) {
 	// Run the benchmark.
 	status(commit, "running")
 	cmd := exec.Command("./"+commit.binPath, "-test.run", "NONE", "-test.bench", ".")
+	if dryRun {
+		dryPrint(cmd)
+		commit.count++
+		return
+	}
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		commit.count++
@@ -360,12 +372,43 @@ func git(subcmd string, args ...string) string {
 	gitargs = append(gitargs, args...)
 	cmd := exec.Command("git", gitargs...)
 	cmd.Stderr = os.Stderr
+	if dryRun {
+		dryPrint(cmd)
+		if !(subcmd == "rev-parse" || subcmd == "rev-list") {
+			return ""
+		}
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "git %s failed: %s", args, err)
 		os.Exit(1)
 	}
 	return string(out)
+}
+
+func dryPrint(cmd *exec.Cmd) {
+	out := shellEscape(cmd.Path)
+	for _, a := range cmd.Args[1:] {
+		out += " " + shellEscape(a)
+	}
+	if cmd.Dir != "" {
+		out = fmt.Sprintf("(cd %s && %s)", shellEscape(cmd.Dir), out)
+	}
+	fmt.Fprintln(os.Stderr, out)
+}
+
+func shellEscape(x string) string {
+	if len(x) == 0 {
+		return "''"
+	}
+	for _, r := range x {
+		if 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || strings.ContainsRune("@%_-+:,./", r) {
+			continue
+		}
+		// Unsafe character.
+		return "'" + strings.Replace(x, "'", "'\"'\"'", -1) + "'"
+	}
+	return x
 }
 
 func exists(path string) bool {

@@ -55,6 +55,9 @@ func defaultRevDir() string {
 // failed) so we don't count those as "successes". OTOH, it may be
 // sufficient to consider a test executed unless we see a failure in
 // that test or that build didn't happen (e.g., a gap in the history).
+//
+// This would also help with fixing the problem where hard build
+// failures are considered successes of all tests.
 
 // TODO: Support pointing this at a set of stress test failures (along
 // with the count of total runs, I guess) and having it classify and
@@ -242,6 +245,15 @@ func extractFailures(revs []*Revision) []*failure {
 		failures := make([]*failure, 0, len(lfailures))
 		for _, lf := range lfailures {
 			// Ignore build failures.
+			//
+			// TODO: This has the effect of counting these
+			// as successes for all tests. In the best
+			// case, this cuts down on the number of
+			// samples per revision. If we have an
+			// across-the-board build failure, it will
+			// drive down the failure rates of all
+			// failures and may even effect timeline
+			// subdivision.
 			if strings.Contains(lf.Message, "build failed") {
 				continue
 			}

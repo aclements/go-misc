@@ -31,15 +31,7 @@ var (
 )
 
 func defaultRevDir() string {
-	paths := append([]string{runtime.GOROOT()}, filepath.SplitList(os.Getenv("GOPATH"))...)
-
-	for _, p := range paths {
-		fetchlogs := filepath.Join(p, "src/golang.org/x/buildx/cmd/fetchlogs")
-		if st, err := os.Stat(fetchlogs); err == nil && st.IsDir() {
-			return filepath.Join(fetchlogs, "rev")
-		}
-	}
-	return ""
+	return filepath.Join(xdgCacheDir(), "fetchlogs", "rev")
 }
 
 // TODO: Tool you can point at a failure log to annotate each failure

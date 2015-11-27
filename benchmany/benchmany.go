@@ -51,8 +51,35 @@ const maxFails = 5
 // TODO: Support printing list of log files names.
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s <subcommand> <args...>\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Subcommands:\n")
+		for _, sub := range subcommands {
+			fmt.Fprintf(os.Stderr, "  %s %s\n", sub.name, sub.desc)
+		}
+		fmt.Fprintf(os.Stderr, "See %s <subcommand> -h for details.\n", os.Args[0])
+	}
 	flag.Parse()
-	cmdRun()
+	if flag.NArg() < 1 || subcommands[flag.Arg(0)] == nil {
+		flag.Usage()
+		os.Exit(2)
+	}
+
+	sub := subcommands[flag.Arg(0)]
+	sub.flags.Parse(flag.Args()[1:])
+	sub.cmd()
+}
+
+type subcommand struct {
+	name, desc string
+	cmd        func()
+	flags      *flag.FlagSet
+}
+
+var subcommands = make(map[string]*subcommand)
+
+func registerSubcommand(name, desc string, cmd func(), flags *flag.FlagSet) {
+	subcommands[name] = &subcommand{name, desc, cmd, flags}
 }
 
 // status prints a status message.

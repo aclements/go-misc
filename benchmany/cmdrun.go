@@ -30,25 +30,29 @@ var (
 	dryRun     bool
 )
 
+var cmdRunFlags = flag.NewFlagSet(os.Args[0]+" run", flag.ExitOnError)
+
 func init() {
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <revision range>\n", os.Args[0])
-		flag.PrintDefaults()
+	f := cmdRunFlags
+	f.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s run [flags] <revision range>\n", os.Args[0])
+		f.PrintDefaults()
 	}
-	flag.StringVar(&gitDir, "C", "", "run git in `dir`")
-	flag.StringVar(&benchFlags, "benchflags", "", "pass `flags` to benchmark")
-	flag.IntVar(&iterations, "n", 5, "run each benchmark `N` times")
-	flag.BoolVar(&goverSave, "gover-save", false, "save toolchain builds with gover")
-	flag.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
+	f.StringVar(&gitDir, "C", "", "run git in `dir`")
+	f.StringVar(&benchFlags, "benchflags", "", "pass `flags` to benchmark")
+	f.IntVar(&iterations, "n", 5, "run each benchmark `N` times")
+	f.BoolVar(&goverSave, "gover-save", false, "save toolchain builds with gover")
+	f.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
+	registerSubcommand("run", "[flags] <revision range> - run benchmarks", cmdRun, f)
 }
 
 func cmdRun() {
-	if flag.NArg() < 1 {
-		flag.Usage()
+	if cmdRunFlags.NArg() < 1 {
+		cmdRunFlags.Usage()
 		os.Exit(2)
 	}
 
-	commits := getCommits(flag.Args(), (*commitInfo).runnable)
+	commits := getCommits(cmdRunFlags.Args(), (*commitInfo).runnable)
 
 	// Get other git information.
 	topLevel = trimNL(git("rev-parse", "--show-toplevel"))

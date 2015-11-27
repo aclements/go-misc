@@ -92,7 +92,7 @@ func main() {
 		st, err := os.Stat(savePath)
 		hashExists := err == nil && st.IsDir()
 
-		nameExists, nameRight := true, true
+		nameExists, nameRight := false, true
 		if name != "" {
 			st2, err := os.Stat(filepath.Join(*verDir, name))
 			nameExists = err == nil && st2.IsDir()

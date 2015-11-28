@@ -52,14 +52,16 @@ func cmdRun() {
 		os.Exit(2)
 	}
 
-	commits := getCommits(cmdRunFlags.Args(), (*commitInfo).runnable)
+	commits := getCommits(cmdRunFlags.Args())
 
 	// Get other git information.
 	topLevel = trimNL(git("rev-parse", "--show-toplevel"))
 
 	totalRuns := 0
 	for _, c := range commits {
-		totalRuns += iterations - c.count
+		if c.runnable() {
+			totalRuns += iterations - c.count
+		}
 	}
 	fmt.Fprintf(os.Stderr, "Benchmarking %d total runs from %d commits...\n", totalRuns, len(commits))
 

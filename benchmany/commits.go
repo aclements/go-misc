@@ -22,7 +22,7 @@ type commitInfo struct {
 	buildFailed  bool
 }
 
-func getCommits(revRange []string, filter func(*commitInfo) bool) []*commitInfo {
+func getCommits(revRange []string) []*commitInfo {
 	// Get commit sequence.
 	hashes := lines(git("rev-list", revRange...))
 
@@ -48,9 +48,7 @@ func getCommits(revRange []string, filter func(*commitInfo) bool) []*commitInfo 
 			fails:       fails,
 			buildFailed: buildFailed,
 		}
-		if filter(commit) {
-			commits = append(commits, commit)
-		}
+		commits = append(commits, commit)
 	}
 
 	return commits

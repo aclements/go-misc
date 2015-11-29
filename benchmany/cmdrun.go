@@ -210,7 +210,7 @@ func runBenchmark(commit *commitInfo) {
 		}
 
 		if isXBenchmark {
-			buildCmd = append(buildCmd, "build")
+			buildCmd = append(buildCmd, "build", "-o", commit.binPath)
 		} else {
 			buildCmd = append(buildCmd, "test", "-c", "-o", commit.binPath)
 		}

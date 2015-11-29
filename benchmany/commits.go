@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 type commitInfo struct {
 	hash         string
+	commitDate   time.Time
 	binPath      string
 	gover        bool
 	logPath      string
@@ -22,9 +24,18 @@ type commitInfo struct {
 	buildFailed  bool
 }
 
+// getCommits returns the commit info for all of the revisions in the
+// given git revision range, where the revision range is spelled as
+// documented in gitrevisions(7). Commits are returned in reverse
+// chronological order, most recent commit first (the same as
+// git-rev-list(1)).
 func getCommits(revRange []string) []*commitInfo {
 	// Get commit sequence.
 	hashes := lines(git("rev-list", revRange...))
+
+	// Get commit dates.
+	args := append([]string{"-s", "--format=format:%cI"}, hashes...)
+	dates := lines(git("show", args...))
 
 	// Get gover-cached builds. It's okay if this fails.
 	cachedHashes := make(map[string]bool)
@@ -36,11 +47,18 @@ func getCommits(revRange []string) []*commitInfo {
 
 	// Load current benchmark state.
 	var commits []*commitInfo
-	for _, hash := range hashes {
+	for i, hash := range hashes {
 		logPath := fmt.Sprintf("log.%s", hash[:7])
 		count, fails, buildFailed := countRuns(logPath)
+		commitDate, err := time.Parse(time.RFC3339, dates[i])
+		if err != nil {
+			log.Fatalf("cannot parse commit date: %v", err)
+		}
+		// TODO: This assumes the 7 character hash is
+		// unambiguous.
 		commit := &commitInfo{
 			hash:        hash,
+			commitDate:  commitDate,
 			binPath:     fmt.Sprintf("bench.%s", hash[:7]),
 			gover:       cachedHashes[hash[:7]],
 			logPath:     logPath,

@@ -176,7 +176,9 @@ func runBenchmark(commit *commitInfo) {
 
 		var buildCmd []string
 		if commit.gover {
-			buildCmd = []string{"gover", "run", commit.hash, "go"}
+			// TODO: It would be better if gover took a
+			// long hash and did the right thing.
+			buildCmd = []string{"gover", "run", commit.hash[:7], "go"}
 		} else {
 			// Check out the appropriate commit.
 			git("checkout", "-q", commit.hash)

@@ -5,8 +5,10 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -17,6 +19,7 @@ var cmdPlotFlags = flag.NewFlagSet(os.Args[0]+" plot", flag.ExitOnError)
 
 var (
 	plotBaseline string
+	plotJSON     bool
 )
 
 // Currently I'm plotting this using gnuplot:
@@ -35,6 +38,7 @@ func init() {
 	}
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
 	f.StringVar(&plotBaseline, "baseline", "", "normalize to `revision`; revision may be \"first\" or \"last\"")
+	f.BoolVar(&plotJSON, "json", false, "emit data in JSON")
 	registerSubcommand("plot", "[flags] <revision range> - print benchmark results", cmdPlot, f)
 }
 
@@ -145,28 +149,34 @@ func cmdPlot() {
 		}
 	}
 
-	// Print tables.
-	for i, table := range tables {
-		if i > 0 {
-			fmt.Printf("\n\n")
+	if plotJSON {
+		if err := json.NewEncoder(os.Stdout).Encode(tables); err != nil {
+			log.Fatal(err)
 		}
-		fmt.Printf("# %s\n", table.Unit)
-
-		for _, row := range table.Rows {
-			for i, val := range row {
-				if i > 0 {
-					fmt.Printf(" ")
-				}
-				switch val := val.(type) {
-				case float64:
-					fmt.Printf("%g", val)
-				case float32:
-					fmt.Printf("%g", val)
-				default:
-					fmt.Printf("%s", val)
-				}
+	} else {
+		// Print tables.
+		for i, table := range tables {
+			if i > 0 {
+				fmt.Printf("\n\n")
 			}
-			fmt.Printf("\n")
+			fmt.Printf("# %s\n", table.Unit)
+
+			for _, row := range table.Rows {
+				for i, val := range row {
+					if i > 0 {
+						fmt.Printf(" ")
+					}
+					switch val := val.(type) {
+					case float64:
+						fmt.Printf("%g", val)
+					case float32:
+						fmt.Printf("%g", val)
+					default:
+						fmt.Printf("%s", val)
+					}
+				}
+				fmt.Printf("\n")
+			}
 		}
 	}
 }

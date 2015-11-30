@@ -93,24 +93,22 @@ func cmdPlot() {
 		os.Exit(2)
 	}
 
-	// Print a table per unit.
+	// Build tables.
+	var tables []*Table
 	var key BenchKey
 	baseline := make([]float64, 0)
 	means := make([]float64, 0)
-	for i, unit := range c.Units {
+	for _, unit := range c.Units {
 		key.Unit = unit
-		if i > 0 {
-			fmt.Printf("\n\n")
-		}
-		fmt.Printf("# %s\n", unit)
+		table := &Table{Unit: unit}
+		tables = append(tables, table)
 
 		// Print table of commit vs. benchmark mean.
 		subc := c.Filter(BenchKey{Unit: unit})
-		fmt.Printf("date commit geomean")
+		table.Rows = [][]interface{}{{"date", "commit", "geomean"}}
 		for _, bench := range subc.Benchmarks {
-			fmt.Printf(" %s", bench)
+			table.Rows[0] = append(table.Rows[0], bench)
 		}
-		fmt.Printf("\n")
 
 		// Get baseline numbers.
 		baseline = baseline[:0]
@@ -138,12 +136,42 @@ func cmdPlot() {
 				means = append(means, subc.Stats[key].Mean)
 			}
 
-			fmt.Printf("%s %s %g", commit.commitDate.Format(time.RFC3339), commit.hash[:7], stats.GeoMean(means)/stats.GeoMean(baseline))
+			row := []interface{}{commit.commitDate.Format(time.RFC3339), commit.hash[:7], stats.GeoMean(means) / stats.GeoMean(baseline)}
 			for i, bench := range subc.Benchmarks {
 				key.Benchmark = bench
-				fmt.Printf(" %g", subc.Stats[key].Mean/baseline[i])
+				row = append(row, subc.Stats[key].Mean/baseline[i])
+			}
+			table.Rows = append(table.Rows, row)
+		}
+	}
+
+	// Print tables.
+	for i, table := range tables {
+		if i > 0 {
+			fmt.Printf("\n\n")
+		}
+		fmt.Printf("# %s\n", table.Unit)
+
+		for _, row := range table.Rows {
+			for i, val := range row {
+				if i > 0 {
+					fmt.Printf(" ")
+				}
+				switch val := val.(type) {
+				case float64:
+					fmt.Printf("%g", val)
+				case float32:
+					fmt.Printf("%g", val)
+				default:
+					fmt.Printf("%s", val)
+				}
 			}
 			fmt.Printf("\n")
 		}
 	}
+}
+
+type Table struct {
+	Unit string
+	Rows [][]interface{}
 }

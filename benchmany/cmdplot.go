@@ -99,23 +99,20 @@ func cmdPlot() {
 
 	// Build tables.
 	var tables []*Table
+	var units []string
 	var key BenchKey
 	baseline := make([]float64, 0)
 	means := make([]float64, 0)
 	for _, unit := range c.Units {
 		key.Unit = unit
-		table := &Table{Unit: unit}
-		if unit == "ns/op" {
-			table.Unit = "op/ns"
-		}
+		table := NewTable()
 		tables = append(tables, table)
-
-		// Print table of commit vs. benchmark mean.
-		subc := c.Filter(BenchKey{Unit: unit})
-		table.Rows = [][]interface{}{{"date", "commit", "geomean"}}
-		for _, bench := range subc.Benchmarks {
-			table.Rows[0] = append(table.Rows[0], bench)
+		units = append(units, unit)
+		if unit == "ns/op" {
+			units[len(units)-1] = "op/ns"
 		}
+
+		subc := c.Filter(BenchKey{Unit: unit})
 
 		// Get baseline numbers.
 		baseline = baseline[:0]
@@ -131,6 +128,9 @@ func cmdPlot() {
 			}
 		}
 
+		// Build columns.
+		dateCol, commitCol := []string{}, []string{}
+		geomeanCol, benchCols := []float64{}, make([][]float64, len(subc.Benchmarks))
 		for _, commit := range commits {
 			key.Config = commit.logPath
 			if !subc.ConfigSet[commit.logPath] {
@@ -143,22 +143,33 @@ func cmdPlot() {
 				means = append(means, subc.Stats[key].Mean)
 			}
 
-			row := []interface{}{commit.commitDate.Format(time.RFC3339), commit.hash[:7], stats.GeoMean(means) / stats.GeoMean(baseline)}
+			dateCol = append(dateCol, commit.commitDate.Format(time.RFC3339))
+			commitCol = append(commitCol, commit.hash[:7])
+			geomeanCol = append(geomeanCol, stats.GeoMean(means)/stats.GeoMean(baseline))
 			for i, bench := range subc.Benchmarks {
 				key.Benchmark = bench
-				row = append(row, subc.Stats[key].Mean/baseline[i])
+				benchCols[i] = append(benchCols[i], subc.Stats[key].Mean/baseline[i])
 			}
 			if unit == "ns/op" {
-				for i := 2; i < len(row); i++ {
-					row[i] = 1 / row[i].(float64)
+				j := len(geomeanCol) - 1
+				geomeanCol[j] = 1 / geomeanCol[j]
+				for i := range benchCols {
+					benchCols[i][j] = 1 / benchCols[i][j]
 				}
 			}
-			table.Rows = append(table.Rows, row)
+		}
+
+		table.AddColumn("date", dateCol)
+		table.AddColumn("commit", commitCol)
+		table.AddColumn("geomean", geomeanCol)
+		for i, bench := range subc.Benchmarks {
+			table.AddColumn(bench, benchCols[i])
 		}
 	}
 
 	if plotJSON {
-		if err := json.NewEncoder(os.Stdout).Encode(tables); err != nil {
+		jsonTable := JSONTable{Unit: units[0], Rows: tables[0].ToRows(true)}
+		if err := json.NewEncoder(os.Stdout).Encode(jsonTable); err != nil {
 			log.Fatal(err)
 		}
 	} else {
@@ -167,29 +178,15 @@ func cmdPlot() {
 			if i > 0 {
 				fmt.Printf("\n\n")
 			}
-			fmt.Printf("# %s\n", table.Unit)
-
-			for _, row := range table.Rows {
-				for i, val := range row {
-					if i > 0 {
-						fmt.Printf(" ")
-					}
-					switch val := val.(type) {
-					case float64:
-						fmt.Printf("%g", val)
-					case float32:
-						fmt.Printf("%g", val)
-					default:
-						fmt.Printf("%s", val)
-					}
-				}
-				fmt.Printf("\n")
+			fmt.Printf("# %s\n", units[i])
+			if err := table.WriteTSV(os.Stdout, true); err != nil {
+				log.Fatal(err)
 			}
 		}
 	}
 }
 
-type Table struct {
+type JSONTable struct {
 	Unit string
 	Rows [][]interface{}
 }

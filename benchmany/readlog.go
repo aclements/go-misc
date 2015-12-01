@@ -37,6 +37,9 @@ type BenchKey struct {
 type Collection struct {
 	Stats map[BenchKey]*Benchstat
 
+	// Keys gives all keys of Stats in the order added.
+	Keys []BenchKey
+
 	// Configs, Benchmarks, and Units give the set of configs,
 	// benchmarks, and units from the keys in Stats in an order
 	// meant to match the order the benchmarks were read in.
@@ -66,6 +69,7 @@ func (c *Collection) addKey(key BenchKey) {
 		*strings = append(*strings, add)
 		set[add] = true
 	}
+	c.Keys = append(c.Keys, key)
 	addString(&c.Configs, c.ConfigSet, key.Config)
 	addString(&c.Benchmarks, c.BenchmarkSet, key.Benchmark)
 	addString(&c.Units, c.UnitSet, key.Unit)
@@ -73,12 +77,12 @@ func (c *Collection) addKey(key BenchKey) {
 
 func (c *Collection) Filter(key BenchKey) *Collection {
 	c2 := NewCollection()
-	for k, s := range c.Stats {
+	for _, k := range c.Keys {
 		if (key.Config == "" || key.Config == k.Config) &&
 			(key.Benchmark == "" || key.Benchmark == k.Benchmark) &&
 			(key.Unit == "" || key.Unit == k.Unit) {
 			c2.addKey(k)
-			c2.Stats[k] = s
+			c2.Stats[k] = c.Stats[k]
 		}
 	}
 	return c2

@@ -105,6 +105,9 @@ func cmdPlot() {
 	for _, unit := range c.Units {
 		key.Unit = unit
 		table := &Table{Unit: unit}
+		if unit == "ns/op" {
+			table.Unit = "op/ns"
+		}
 		tables = append(tables, table)
 
 		// Print table of commit vs. benchmark mean.
@@ -144,6 +147,11 @@ func cmdPlot() {
 			for i, bench := range subc.Benchmarks {
 				key.Benchmark = bench
 				row = append(row, subc.Stats[key].Mean/baseline[i])
+			}
+			if unit == "ns/op" {
+				for i := 2; i < len(row); i++ {
+					row[i] = 1 / row[i].(float64)
+				}
 			}
 			table.Rows = append(table.Rows, row)
 		}

@@ -20,6 +20,7 @@ var cmdPlotFlags = flag.NewFlagSet(os.Args[0]+" plot", flag.ExitOnError)
 var (
 	plotBaseline string
 	plotJSON     bool
+	plotFilter   bool
 )
 
 // Currently I'm plotting this using gnuplot:
@@ -27,8 +28,6 @@ var (
 // plot for [i=3:50] 'data' using 0:i index "ns/op" with l title columnhead
 
 // TODO: HTML output using Google Charts?
-
-// TODO: Low-pass filter?
 
 func init() {
 	f := cmdPlotFlags
@@ -39,6 +38,7 @@ func init() {
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
 	f.StringVar(&plotBaseline, "baseline", "", "normalize to `revision`; revision may be \"first\" or \"last\"")
 	f.BoolVar(&plotJSON, "json", false, "emit data in JSON")
+	f.BoolVar(&plotFilter, "filter", false, "KZA filter benchmark results to reduce noise")
 	registerSubcommand("plot", "[flags] <revision range> - print benchmark results", cmdPlot, f)
 }
 
@@ -163,6 +163,9 @@ func cmdPlot() {
 		table.AddColumn("commit", commitCol)
 		table.AddColumn("geomean", geomeanCol)
 		for i, bench := range subc.Benchmarks {
+			if plotFilter {
+				benchCols[i] = AdaptiveKolmogorovZurbenko(benchCols[i], 15, 3)
+			}
 			table.AddColumn(bench, benchCols[i])
 		}
 	}

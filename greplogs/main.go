@@ -24,8 +24,6 @@ import (
 // TODO: Optionally classify matched logs by failure (and show either
 // file name or extracted failure).
 
-// TODO: Option to print Markdown-friendly output for GitHub.
-
 // TODO: Option to print failure summary versus full failure message.
 
 // TODO: Option to only show failures matching regexp? Currently we
@@ -40,6 +38,7 @@ var (
 	regexpList     []*regexp.Regexp
 
 	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
+	flagMD        = flag.Bool("md", false, "output in Markdown")
 )
 
 func main() {
@@ -118,6 +117,21 @@ func process(path, nicePath string) (found bool, err error) {
 		}
 	}
 
+	// If this is from the dashboard, get the builder URL.
+	var logURL string
+	if *flagDashboard {
+		link, err := os.Readlink(path)
+		if err == nil {
+			hash := filepath.Base(link)
+			logURL = "https://build.golang.org/log/" + hash
+		}
+	}
+
+	printPath := nicePath
+	if *flagMD && logURL != "" {
+		printPath = fmt.Sprintf("[%s](%s)", nicePath, logURL)
+	}
+
 	// Extract failures.
 	failures, err := loganal.Extract(string(data), "", "")
 	if err != nil {
@@ -130,7 +144,12 @@ func process(path, nicePath string) (found bool, err error) {
 		if msg == "" {
 			msg = failure.Message
 		}
-		fmt.Printf("%s:\n%s\n\n", nicePath, msg)
+		fmt.Printf("%s:\n", printPath)
+		if *flagMD {
+			fmt.Printf("```\n%s\n```\n\n", msg)
+		} else {
+			fmt.Printf("%s\n\n", msg)
+		}
 	}
 	return true, nil
 }

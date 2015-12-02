@@ -39,6 +39,7 @@ var (
 
 	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
 	flagMD        = flag.Bool("md", false, "output in Markdown")
+	flagFilesOnly = flag.Bool("l", false, "print only names of matching files")
 )
 
 func main() {
@@ -130,6 +131,11 @@ func process(path, nicePath string) (found bool, err error) {
 	printPath := nicePath
 	if *flagMD && logURL != "" {
 		printPath = fmt.Sprintf("[%s](%s)", nicePath, logURL)
+	}
+
+	if *flagFilesOnly {
+		fmt.Printf("%s\n", printPath)
+		return true, nil
 	}
 
 	// Extract failures.

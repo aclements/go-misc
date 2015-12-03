@@ -129,9 +129,9 @@ func cmdPlot() {
 		}
 
 		// Build columns.
-		dateCol, commitCol := []string{}, []string{}
+		dateCol, commitCol, idxCol := []string{}, []string{}, []int{}
 		geomeanCol, benchCols := []float64{}, make([][]float64, len(subc.Benchmarks))
-		for _, commit := range commits {
+		for i, commit := range commits {
 			key.Config = commit.logPath
 			if !subc.ConfigSet[commit.logPath] {
 				continue
@@ -145,6 +145,7 @@ func cmdPlot() {
 
 			dateCol = append(dateCol, commit.commitDate.Format(time.RFC3339))
 			commitCol = append(commitCol, commit.hash[:7])
+			idxCol = append(idxCol, i)
 			geomeanCol = append(geomeanCol, stats.GeoMean(means)/stats.GeoMean(baseline))
 			for i, bench := range subc.Benchmarks {
 				key.Benchmark = bench

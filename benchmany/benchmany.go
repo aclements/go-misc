@@ -101,7 +101,7 @@ func git(subcmd string, args ...string) string {
 	cmd.Stderr = os.Stderr
 	if dryRun {
 		dryPrint(cmd)
-		if !(subcmd == "rev-parse" || subcmd == "rev-list") {
+		if !(subcmd == "rev-parse" || subcmd == "rev-list" || subcmd == "show") {
 			return ""
 		}
 	}

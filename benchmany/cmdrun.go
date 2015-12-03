@@ -16,13 +16,12 @@ import (
 
 // TODO: Check CPU performance governor before each benchmark.
 
-// TODO: Support both sequential and randomized mode.
-
-// TODO: Support adding builds to gover cache.
+// TODO: Mode to prioritize commits around big changes.
 
 // TODO: Flag to specify output directory.
 
 var (
+	runOrder   string
 	topLevel   string
 	benchFlags string
 	iterations int
@@ -38,6 +37,7 @@ func init() {
 		fmt.Fprintf(os.Stderr, "Usage: %s run [flags] <revision range>\n", os.Args[0])
 		f.PrintDefaults()
 	}
+	f.StringVar(&runOrder, "order", "seq", "run benchmarks in `order`, which must be one of: seq, spread")
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
 	f.StringVar(&benchFlags, "benchflags", "", "pass `flags` to benchmark")
 	f.IntVar(&iterations, "n", 5, "run each benchmark `N` times")
@@ -48,6 +48,18 @@ func init() {
 
 func cmdRun() {
 	if cmdRunFlags.NArg() < 1 {
+		cmdRunFlags.Usage()
+		os.Exit(2)
+	}
+
+	var pickCommit func([]*commitInfo) *commitInfo
+	switch runOrder {
+	case "seq":
+		pickCommit = pickCommitSeq
+	case "spread":
+		pickCommit = pickCommitSpread
+	default:
+		fmt.Fprintf(os.Stderr, "unknown order: %s\n", runOrder)
 		cmdRunFlags.Usage()
 		os.Exit(2)
 	}
@@ -74,8 +86,24 @@ func cmdRun() {
 	}
 }
 
-// pickCommit picks the next commit to run from commits.
-func pickCommit(commits []*commitInfo) *commitInfo {
+// pickCommitSeq picks the next commit to run based on the most recent
+// commit with the fewest iterations.
+func pickCommitSeq(commits []*commitInfo) *commitInfo {
+	var minCommit *commitInfo
+	for _, commit := range commits {
+		if !commit.runnable() {
+			continue
+		}
+		if minCommit == nil || commit.count < minCommit.count {
+			minCommit = commit
+		}
+	}
+	return minCommit
+}
+
+// pickCommitSpread picks the next commit to run from commits using an
+// algorithm that spreads out the runs.
+func pickCommitSpread(commits []*commitInfo) *commitInfo {
 	// Assign weights to each commit. This is thoroughly
 	// heuristic, but it's geared toward either increasing the
 	// iteration count of commits that we have, or picking a new

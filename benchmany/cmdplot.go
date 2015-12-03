@@ -161,6 +161,9 @@ func cmdPlot() {
 
 		table.AddColumn("date", dateCol)
 		table.AddColumn("commit", commitCol)
+		if plotFilter {
+			geomeanCol = AdaptiveKolmogorovZurbenko(geomeanCol, 15, 3)
+		}
 		table.AddColumn("geomean", geomeanCol)
 		for i, bench := range subc.Benchmarks {
 			if plotFilter {

@@ -17,11 +17,11 @@ import (
 
 var cmdPlotFlags = flag.NewFlagSet(os.Args[0]+" plot", flag.ExitOnError)
 
-var (
-	plotBaseline string
-	plotJSON     bool
-	plotFilter   bool
-)
+var plot struct {
+	baseline string
+	json     bool
+	filter   bool
+}
 
 // Currently I'm plotting this using gnuplot:
 //
@@ -36,9 +36,9 @@ func init() {
 		f.PrintDefaults()
 	}
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
-	f.StringVar(&plotBaseline, "baseline", "", "normalize to `revision`; revision may be \"first\" or \"last\"")
-	f.BoolVar(&plotJSON, "json", false, "emit data in JSON")
-	f.BoolVar(&plotFilter, "filter", false, "KZA filter benchmark results to reduce noise")
+	f.StringVar(&plot.baseline, "baseline", "", "normalize to `revision`; revision may be \"first\" or \"last\"")
+	f.BoolVar(&plot.json, "json", false, "emit data in JSON")
+	f.BoolVar(&plot.filter, "filter", false, "KZA filter benchmark results to reduce noise")
 	registerSubcommand("plot", "[flags] <revision range> - print benchmark results", cmdPlot, f)
 }
 
@@ -69,18 +69,18 @@ func cmdPlot() {
 
 	// Get baseline commit.
 	var baselineCommit *commitInfo
-	if plotBaseline == "first" || plotBaseline == "last" {
+	if plot.baseline == "first" || plot.baseline == "last" {
 		// Find the first/last commit with benchmark data.
 		for _, commit := range commits {
 			if c.ConfigSet[commit.logPath] {
 				baselineCommit = commit
-				if plotBaseline == "first" {
+				if plot.baseline == "first" {
 					break
 				}
 			}
 		}
-	} else if plotBaseline != "" {
-		hash := trimNL(git("rev-parse", "--", plotBaseline))
+	} else if plot.baseline != "" {
+		hash := trimNL(git("rev-parse", "--", plot.baseline))
 		for _, commit := range commits {
 			if hash == commit.hash {
 				baselineCommit = commit
@@ -161,19 +161,20 @@ func cmdPlot() {
 
 		table.AddColumn("date", dateCol)
 		table.AddColumn("commit", commitCol)
-		if plotFilter {
+		table.AddColumn("i", idxCol)
+		if plot.filter {
 			geomeanCol = AdaptiveKolmogorovZurbenko(geomeanCol, 15, 3)
 		}
 		table.AddColumn("geomean", geomeanCol)
 		for i, bench := range subc.Benchmarks {
-			if plotFilter {
+			if plot.filter {
 				benchCols[i] = AdaptiveKolmogorovZurbenko(benchCols[i], 15, 3)
 			}
 			table.AddColumn(bench, benchCols[i])
 		}
 	}
 
-	if plotJSON {
+	if plot.json {
 		var jsonTables []JSONTable
 		for i, table := range tables {
 			jsonTables = append(jsonTables, JSONTable{Unit: units[i], Rows: table.ToRows(true)})

@@ -174,8 +174,11 @@ func cmdPlot() {
 	}
 
 	if plotJSON {
-		jsonTable := JSONTable{Unit: units[0], Rows: tables[0].ToRows(true)}
-		if err := json.NewEncoder(os.Stdout).Encode(jsonTable); err != nil {
+		var jsonTables []JSONTable
+		for i, table := range tables {
+			jsonTables = append(jsonTables, JSONTable{Unit: units[i], Rows: table.ToRows(true)})
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(jsonTables); err != nil {
 			log.Fatal(err)
 		}
 	} else {

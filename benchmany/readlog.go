@@ -106,6 +106,22 @@ func readFiles(files ...string) *Collection {
 	return c
 }
 
+var unitOfXMetric = map[string]string{
+	"time":           "ns/op",
+	"allocated":      "allocated bytes/op",      // ΔMemStats.TotalAlloc / N
+	"allocs":         "allocs/op",               // ΔMemStats.Mallocs / N
+	"sys-total":      "bytes from system",       // MemStats.Sys
+	"sys-heap":       "heap bytes from system",  // MemStats.HeapSys
+	"sys-stack":      "stack bytes from system", // MemStats.StackSys
+	"sys-gc":         "GC bytes from system",    // MemStats.GCSys
+	"sys-other":      "other bytes from system", // MemStats.OtherSys+MSpanSys+MCacheSys+BuckHashSys
+	"gc-pause-total": "STW ns/op",               // ΔMemStats.PauseTotalNs / N
+	"gc-pause-one":   "STW ns/GC",               // ΔMemStats.PauseTotalNs / ΔNumGC
+	"rss":            "max RSS bytes",           // Rusage.Maxrss * 1<<10
+	"cputime":        "user+sys ns/op",          // Rusage.Utime+Stime
+	"virtual-mem":    "peak VM bytes",           // /proc/self/status VmPeak
+}
+
 // readFile reads a set of benchmarks from a file in to a Collection.
 func readFile(file string, c *Collection) {
 	c.Configs = append(c.Configs, file)
@@ -116,6 +132,24 @@ func readFile(file string, c *Collection) {
 		log.Fatal(err)
 	}
 	for _, line := range strings.Split(string(text), "\n") {
+		if strings.HasPrefix(line, "GOPERF-METRIC:") {
+			// x/benchmarks-style output.
+			line := line[14:]
+			f := strings.Split(line, "=")
+			val, err := strconv.ParseFloat(f[1], 64)
+			if err != nil {
+				continue
+			}
+			key.Benchmark = f[0]
+			key.Unit = unitOfXMetric[f[0]]
+			if key.Unit == "" {
+				continue
+			}
+			stat := c.AddStat(key)
+			stat.Values = append(stat.Values, val)
+			continue
+		}
+
 		f := strings.Fields(line)
 		if len(f) < 4 {
 			continue

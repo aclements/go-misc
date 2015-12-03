@@ -6,6 +6,13 @@ package main
 
 import "math"
 
+// TODO: This all assumes that data is sampled at a regular interval
+// and there are no missing values. It could be generalized to accept
+// missing values (perhaps represented by NaN), or generalized much
+// further by accepting (t, x) pairs and a vector of times at which to
+// evaluate the filter (and an arbitrary window size). I would have to
+// figure out how that affects the difference array in KZA.
+
 // MovingAverage performs a moving average (MA) filter of xs with
 // window size m. m must be a positive odd integer.
 //

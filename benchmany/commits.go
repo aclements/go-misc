@@ -85,6 +85,7 @@ func countRuns(path string) (count, fails int, buildFailed bool) {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
+	inXMetrics := false
 	for scanner.Scan() {
 		t := scanner.Text()
 		if t == "PASS" {
@@ -93,6 +94,14 @@ func countRuns(path string) (count, fails int, buildFailed bool) {
 			fails++
 		} else if t == "BUILD FAILED:" {
 			buildFailed = true
+		}
+		if strings.HasPrefix(t, "GOPERF-METRIC:") {
+			if !inXMetrics {
+				count++
+			}
+			inXMetrics = true
+		} else {
+			inXMetrics = false
 		}
 	}
 	if err := scanner.Err(); err != nil {

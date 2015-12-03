@@ -20,14 +20,13 @@ import (
 
 // TODO: Flag to specify output directory.
 
-var (
-	runOrder   string
+var run struct {
+	order      string
 	topLevel   string
 	benchFlags string
 	iterations int
 	goverSave  bool
-	dryRun     bool
-)
+}
 
 var cmdRunFlags = flag.NewFlagSet(os.Args[0]+" run", flag.ExitOnError)
 
@@ -37,11 +36,11 @@ func init() {
 		fmt.Fprintf(os.Stderr, "Usage: %s run [flags] <revision range>\n", os.Args[0])
 		f.PrintDefaults()
 	}
-	f.StringVar(&runOrder, "order", "seq", "run benchmarks in `order`, which must be one of: seq, spread")
+	f.StringVar(&run.order, "order", "seq", "run benchmarks in `order`, which must be one of: seq, spread")
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
-	f.StringVar(&benchFlags, "benchflags", "", "pass `flags` to benchmark")
-	f.IntVar(&iterations, "n", 5, "run each benchmark `N` times")
-	f.BoolVar(&goverSave, "gover-save", false, "save toolchain builds with gover")
+	f.StringVar(&run.benchFlags, "benchflags", "", "pass `flags` to benchmark")
+	f.IntVar(&run.iterations, "n", 5, "run each benchmark `N` times")
+	f.BoolVar(&run.goverSave, "gover-save", false, "save toolchain builds with gover")
 	f.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
 	registerSubcommand("run", "[flags] <revision range> - run benchmarks", cmdRun, f)
 }
@@ -53,13 +52,13 @@ func cmdRun() {
 	}
 
 	var pickCommit func([]*commitInfo) *commitInfo
-	switch runOrder {
+	switch run.order {
 	case "seq":
 		pickCommit = pickCommitSeq
 	case "spread":
 		pickCommit = pickCommitSpread
 	default:
-		fmt.Fprintf(os.Stderr, "unknown order: %s\n", runOrder)
+		fmt.Fprintf(os.Stderr, "unknown order: %s\n", run.order)
 		cmdRunFlags.Usage()
 		os.Exit(2)
 	}
@@ -67,12 +66,12 @@ func cmdRun() {
 	commits := getCommits(cmdRunFlags.Args())
 
 	// Get other git information.
-	topLevel = trimNL(git("rev-parse", "--show-toplevel"))
+	run.topLevel = trimNL(git("rev-parse", "--show-toplevel"))
 
 	totalRuns := 0
 	for _, c := range commits {
 		if c.runnable() {
-			totalRuns += iterations - c.count
+			totalRuns += run.iterations - c.count
 		}
 	}
 	fmt.Fprintf(os.Stderr, "Benchmarking %d total runs from %d commits...\n", totalRuns, len(commits))
@@ -125,7 +124,7 @@ func pickCommitSpread(commits []*commitInfo) *commitInfo {
 			if commit.partial() {
 				// Bias toward commits that are
 				// further from done.
-				weights[i] = iterations - commit.count
+				weights[i] = run.iterations - commit.count
 			}
 		}
 	} else {
@@ -215,9 +214,9 @@ func runBenchmark(commit *commitInfo) {
 			// make.bash. Otherwise, we assume that go
 			// test -c will build the necessary
 			// dependencies.
-			if exists(filepath.Join(topLevel, "src", "make.bash")) {
+			if exists(filepath.Join(run.topLevel, "src", "make.bash")) {
 				cmd := exec.Command("./make.bash")
-				cmd.Dir = filepath.Join(topLevel, "src")
+				cmd.Dir = filepath.Join(run.topLevel, "src")
 				if dryRun {
 					dryPrint(cmd)
 				} else if out, err := cmd.CombinedOutput(); err != nil {
@@ -227,10 +226,10 @@ func runBenchmark(commit *commitInfo) {
 					commit.writeLog([]byte("BUILD FAILED:\n" + detail))
 					return
 				}
-				if goverSave && doGoverSave() == nil {
+				if run.goverSave && doGoverSave() == nil {
 					commit.gover = true
 				}
-				buildCmd = []string{filepath.Join(topLevel, "bin", "go")}
+				buildCmd = []string{filepath.Join(run.topLevel, "bin", "go")}
 			} else {
 				// Assume go is in $PATH.
 				buildCmd = []string{"go"}
@@ -262,7 +261,7 @@ func runBenchmark(commit *commitInfo) {
 	} else {
 		args = []string{"-test.run", "NONE", "-test.bench", "."}
 	}
-	args = append(args, strings.Fields(benchFlags)...)
+	args = append(args, strings.Fields(run.benchFlags)...)
 	cmd := exec.Command("./"+commit.binPath, args...)
 	if dryRun {
 		dryPrint(cmd)
@@ -286,7 +285,7 @@ func runBenchmark(commit *commitInfo) {
 
 func doGoverSave() error {
 	cmd := exec.Command("gover", "save")
-	cmd.Env = append([]string{"GOROOT=" + topLevel}, os.Environ()...)
+	cmd.Env = append([]string{"GOROOT=" + run.topLevel}, os.Environ()...)
 	if dryRun {
 		dryPrint(cmd)
 		return nil
@@ -297,4 +296,10 @@ func doGoverSave() error {
 		}
 		return err
 	}
+}
+
+// status prints a status message.
+func status(commit *commitInfo, status string) {
+	// TODO: Indicate progress across all runs.
+	fmt.Printf("commit %s, iteration %d/%d: %s...\n", commit.hash[:7], commit.count+1, run.iterations, status)
 }

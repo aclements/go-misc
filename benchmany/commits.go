@@ -114,7 +114,7 @@ func countRuns(path string) (count, fails int, buildFailed bool) {
 // runnable returns whether commit c needs to be benchmarked at least
 // one more time.
 func (c *commitInfo) runnable() bool {
-	return !c.buildFailed && c.fails < maxFails && c.count < iterations
+	return !c.buildFailed && c.fails < maxFails && c.count < run.iterations
 }
 
 // partial returns true if this commit is both runnable and already

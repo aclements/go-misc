@@ -42,6 +42,7 @@ import (
 )
 
 var gitDir string
+var dryRun bool
 
 // maxFails is the maximum number of benchmark run failures to
 // tolerate for a commit before giving up on trying to benchmark that
@@ -80,12 +81,6 @@ var subcommands = make(map[string]*subcommand)
 
 func registerSubcommand(name, desc string, cmd func(), flags *flag.FlagSet) {
 	subcommands[name] = &subcommand{name, desc, cmd, flags}
-}
-
-// status prints a status message.
-func status(commit *commitInfo, status string) {
-	// TODO: Indicate progress across all runs.
-	fmt.Printf("commit %s, iteration %d/%d: %s...\n", commit.hash[:7], commit.count+1, iterations, status)
 }
 
 // git runs git subcommand subcmd and returns its stdout. If git

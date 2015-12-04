@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"time"
 
@@ -173,6 +174,12 @@ func cmdPlot() {
 			}
 			table.AddColumn(bench, benchCols[i])
 		}
+
+		// Trim the number of significant figures.
+		roundCol(geomeanCol, 5)
+		for _, benchCol := range benchCols {
+			roundCol(benchCol, 5)
+		}
 	}
 
 	if plot.json {
@@ -200,4 +207,14 @@ func cmdPlot() {
 type JSONTable struct {
 	Unit string
 	Rows [][]interface{}
+}
+
+func roundCol(xs []float64, sigfigs int) {
+	for i, x := range xs {
+		if x == 0 {
+			continue
+		}
+		f := math.Pow(10, float64(sigfigs)-math.Ceil(math.Log10(math.Abs(x))))
+		xs[i] = math.Floor(x*f+0.5) / f
+	}
 }

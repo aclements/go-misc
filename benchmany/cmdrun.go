@@ -73,7 +73,7 @@ func cmdRun() {
 
 	for {
 		doneIters, totalIters, doneCommits, failedCommits := runStats(commits)
-		msg := fmt.Sprintf("%d/%d iterations, %d done+%d failed/%d commits", doneIters, totalIters, doneCommits, failedCommits, len(commits))
+		msg := fmt.Sprintf("%d/%d iterations, %d/%d commits (%d failed)", doneIters, totalIters, doneCommits+failedCommits, len(commits), failedCommits)
 		// TODO: Count builds and runs separately.
 		status.Progress(msg, float64(doneIters)/float64(totalIters))
 

@@ -68,21 +68,38 @@ func cmdRun() {
 	// Get other git information.
 	run.topLevel = trimNL(git("rev-parse", "--show-toplevel"))
 
-	totalRuns := 0
-	for _, c := range commits {
-		if c.runnable() {
-			totalRuns += run.iterations - c.count
-		}
-	}
-	fmt.Fprintf(os.Stderr, "Benchmarking %d total runs from %d commits...\n", totalRuns, len(commits))
+	status := NewStatusReporter()
+	defer status.Stop()
 
 	for {
+		doneIters, totalIters, doneCommits, failedCommits := runStats(commits)
+		msg := fmt.Sprintf("%d/%d iterations, %d done+%d failed/%d commits", doneIters, totalIters, doneCommits, failedCommits, len(commits))
+		// TODO: Count builds and runs separately.
+		status.Progress(msg, float64(doneIters)/float64(totalIters))
+
 		commit := pickCommit(commits)
 		if commit == nil {
 			break
 		}
-		runBenchmark(commit)
+		runBenchmark(commit, status)
 	}
+}
+
+func runStats(commits []*commitInfo) (doneIters, totalIters, doneCommits, failedCommits int) {
+	for _, c := range commits {
+		if c.count >= run.iterations {
+			// Don't care if it failed.
+			doneIters += c.count
+			totalIters += c.count
+			doneCommits++
+		} else if c.runnable() {
+			doneIters += c.count
+			totalIters += run.iterations
+		} else {
+			failedCommits++
+		}
+	}
+	return
 }
 
 // pickCommitSeq picks the next commit to run based on the most recent
@@ -191,7 +208,7 @@ func pickCommitSpread(commits []*commitInfo) *commitInfo {
 // runBenchmark runs the benchmark at commit. It updates commit.count,
 // commit.fails, and commit.buildFailed as appropriate and writes to
 // the commit log to record the outcome.
-func runBenchmark(commit *commitInfo) {
+func runBenchmark(commit *commitInfo, status *StatusReporter) {
 	isXBenchmark := false
 	if abs, _ := os.Getwd(); strings.Contains(abs, "golang.org/x/benchmarks/") {
 		isXBenchmark = true
@@ -199,7 +216,7 @@ func runBenchmark(commit *commitInfo) {
 
 	// Build the benchmark if necessary.
 	if !exists(commit.binPath) {
-		status(commit, "building")
+		runStatus(status, commit, "building")
 
 		var buildCmd []string
 		if commit.gover {
@@ -254,7 +271,7 @@ func runBenchmark(commit *commitInfo) {
 	}
 
 	// Run the benchmark.
-	status(commit, "running")
+	runStatus(status, commit, "running")
 	var args []string
 	if isXBenchmark {
 		args = []string{}
@@ -298,8 +315,7 @@ func doGoverSave() error {
 	}
 }
 
-// status prints a status message.
-func status(commit *commitInfo, status string) {
-	// TODO: Indicate progress across all runs.
-	fmt.Printf("commit %s, iteration %d/%d: %s...\n", commit.hash[:7], commit.count+1, run.iterations, status)
+// runStatus updates the status message for commit.
+func runStatus(sr *StatusReporter, commit *commitInfo, status string) {
+	sr.Message(fmt.Sprintf("commit %s, iteration %d/%d: %s...", commit.hash[:7], commit.count+1, run.iterations, status))
 }

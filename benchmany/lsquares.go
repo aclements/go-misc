@@ -101,10 +101,17 @@ func PolynomialRegression(degree int, xs, ys, weights []float64) (coefficients [
 			copy(termOut, xs)
 		}
 	}
-	for i := 2; i < len(terms); i++ {
-		terms[i] = func(xs, termOut []float64) {
+	if degree >= 2 {
+		terms[2] = func(xs, termOut []float64) {
 			for i, x := range xs {
-				termOut[i] = math.Pow(x, float64(i+1))
+				termOut[i] = x * x
+			}
+		}
+	}
+	for d := 3; d < len(terms); d++ {
+		terms[d] = func(xs, termOut []float64) {
+			for i, x := range xs {
+				termOut[i] = math.Pow(x, float64(d+1))
 			}
 		}
 	}

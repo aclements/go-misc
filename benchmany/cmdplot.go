@@ -132,10 +132,14 @@ func cmdPlot() {
 		// Build columns.
 		dateCol, commitCol, idxCol := []string{}, []string{}, []int{}
 		geomeanCol, benchCols := []float64{}, make([][]float64, len(subc.Benchmarks))
+		baselineIdx := -1
 		for i, commit := range commits {
 			key.Config = commit.logPath
 			if !subc.ConfigSet[commit.logPath] {
 				continue
+			}
+			if commit == baselineCommit {
+				baselineIdx = len(dateCol)
 			}
 
 			means = means[:0]
@@ -161,26 +165,41 @@ func cmdPlot() {
 			}
 		}
 
-		table.AddColumn("date", dateCol)
-		table.AddColumn("commit", commitCol)
-		table.AddColumn("i", idxCol)
-		if len(benchCols) > 1 {
-			if plot.filter {
-				geomeanCol = AdaptiveKolmogorovZurbenko(geomeanCol, 15, 3)
-			}
-			table.AddColumn("geomean", geomeanCol)
-		}
-		for i, bench := range subc.Benchmarks {
-			if plot.filter {
+		// Filter the columns.
+		if plot.filter {
+			geomeanCol = AdaptiveKolmogorovZurbenko(geomeanCol, 15, 3)
+			for i := range benchCols {
 				benchCols[i] = AdaptiveKolmogorovZurbenko(benchCols[i], 15, 3)
 			}
-			table.AddColumn(bench, benchCols[i])
+		}
+
+		// Normalize the columns.
+		if baselineCommit != nil {
+			if baselineIdx == -1 {
+				fmt.Fprintf(os.Stderr, "baseline commit has no data for %s\n", key.Unit)
+				os.Exit(2)
+			}
+			divideCol(geomeanCol, geomeanCol[baselineIdx])
+			for _, benchCol := range benchCols {
+				divideCol(benchCol, benchCol[baselineIdx])
+			}
 		}
 
 		// Trim the number of significant figures.
 		roundCol(geomeanCol, 5)
 		for _, benchCol := range benchCols {
 			roundCol(benchCol, 5)
+		}
+
+		// Build the table.
+		table.AddColumn("date", dateCol)
+		table.AddColumn("commit", commitCol)
+		table.AddColumn("i", idxCol)
+		if len(benchCols) > 1 {
+			table.AddColumn("geomean", geomeanCol)
+		}
+		for i, bench := range subc.Benchmarks {
+			table.AddColumn(bench, benchCols[i])
 		}
 	}
 
@@ -209,6 +228,12 @@ func cmdPlot() {
 type JSONTable struct {
 	Unit string
 	Rows [][]interface{}
+}
+
+func divideCol(xs []float64, by float64) {
+	for i, x := range xs {
+		xs[i] = x / by
+	}
 }
 
 func roundCol(xs []float64, sigfigs int) {

@@ -193,8 +193,8 @@ func cmdPlot() {
 
 		// Build the table.
 		table.AddColumn("date", dateCol)
-		table.AddColumn("commit", commitCol)
 		table.AddColumn("i", idxCol)
+		table.AddColumn("commit", commitCol)
 		if len(benchCols) > 1 {
 			table.AddColumn("geomean", geomeanCol)
 		}

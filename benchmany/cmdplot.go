@@ -206,7 +206,7 @@ func cmdPlot() {
 	if plot.json {
 		var jsonTables []JSONTable
 		for i, table := range tables {
-			jsonTables = append(jsonTables, JSONTable{Unit: units[i], Rows: table.ToRows(true)})
+			jsonTables = append(jsonTables, JSONTable{units[i], table})
 		}
 		if err := json.NewEncoder(os.Stdout).Encode(jsonTables); err != nil {
 			log.Fatal(err)
@@ -227,7 +227,7 @@ func cmdPlot() {
 
 type JSONTable struct {
 	Unit string
-	Rows [][]interface{}
+	*Table
 }
 
 func divideCol(xs []float64, by float64) {

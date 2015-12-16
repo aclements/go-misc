@@ -26,8 +26,8 @@ import (
 // TODO: Option to print failure summary versus full failure message.
 
 var (
-	flagRegexpList  regexpList
-	flagFailRegexps regexpList
+	fileRegexps regexpList
+	failRegexps regexpList
 
 	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
 	flagMD        = flag.Bool("md", false, "output in Markdown")
@@ -37,8 +37,8 @@ var (
 func main() {
 	// XXX What I want right now is just to point it at a bunch of
 	// logs and have it extract the failures.
-	flag.Var(&flagRegexpList, "e", "show files matching `regexp`; if provided multiple times, files must match all regexps")
-	flag.Var(&flagFailRegexps, "E", "show only errors matching `regexp`; if provided multiple times, an error must match all regexps")
+	flag.Var(&fileRegexps, "e", "show files matching `regexp`; if provided multiple times, files must match all regexps")
+	flag.Var(&failRegexps, "E", "show only errors matching `regexp`; if provided multiple times, an error must match all regexps")
 	flag.Parse()
 
 	// Validate flags.
@@ -97,7 +97,7 @@ func process(path, nicePath string) (found bool, err error) {
 	}
 
 	// Check regexp match.
-	if !flagRegexpList.AllMatch(data) || !flagFailRegexps.AllMatch(data) {
+	if !fileRegexps.AllMatch(data) || !failRegexps.AllMatch(data) {
 		return false, nil
 	}
 
@@ -134,7 +134,7 @@ func process(path, nicePath string) (found bool, err error) {
 			msg = failure.Message
 		}
 
-		if len(flagFailRegexps) > 0 && !flagFailRegexps.AllMatch([]byte(msg)) {
+		if len(failRegexps) > 0 && !failRegexps.AllMatch([]byte(msg)) {
 			continue
 		}
 

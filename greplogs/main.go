@@ -10,7 +10,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/aclements/go-misc/internal/loganal"
@@ -34,8 +33,7 @@ import (
 // failures, which may not contain the matched regexps.
 
 var (
-	flagRegexpList stringList
-	regexpList     []*regexp.Regexp
+	flagRegexpList regexpList
 
 	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
 	flagMD        = flag.Bool("md", false, "output in Markdown")
@@ -49,14 +47,6 @@ func main() {
 	flag.Parse()
 
 	// Validate flags.
-	for _, flagRegexp := range flagRegexpList {
-		re, err := regexp.Compile("(?m)" + flagRegexp)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "bad regexp %v: %v\n", flagRegexp, err)
-			os.Exit(2)
-		}
-		regexpList = append(regexpList, re)
-	}
 	if *flagDashboard && flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "-dashboard and paths are incompatible\n")
 		os.Exit(2)
@@ -112,7 +102,7 @@ func process(path, nicePath string) (found bool, err error) {
 	}
 
 	// Check regexp match.
-	for _, re := range regexpList {
+	for _, re := range flagRegexpList {
 		if !re.Match(data) {
 			return false, nil
 		}

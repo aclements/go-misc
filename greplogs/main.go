@@ -103,7 +103,8 @@ func process(path, nicePath string) (found bool, err error) {
 
 	// If this is from the dashboard, get the builder URL.
 	var logURL string
-	if *flagDashboard {
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), ".rev.json")); err == nil {
+		// TODO: Get the URL from the rev.json metadata
 		link, err := os.Readlink(path)
 		if err == nil {
 			hash := filepath.Base(link)

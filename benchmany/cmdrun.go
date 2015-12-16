@@ -20,6 +20,10 @@ import (
 
 // TODO: Flag to specify output directory.
 
+// TODO: Support running pre-built binaries without specific hashes.
+// This is useful for testing things that aren't yet committed or that
+// require unusual build steps.
+
 var run struct {
 	order      string
 	topLevel   string

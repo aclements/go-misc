@@ -13,6 +13,10 @@ import "math"
 // evaluate the filter (and an arbitrary window size). I would have to
 // figure out how that affects the difference array in KZA.
 
+// TODO: These can generate a lot of garbage. Perhaps the caller
+// should pass in the target slice? Or these should just overwrite the
+// input array and leave it to the caller to copy if necessary?
+
 // MovingAverage performs a moving average (MA) filter of xs with
 // window size m. m must be a positive odd integer.
 //

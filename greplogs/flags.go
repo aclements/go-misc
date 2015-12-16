@@ -32,3 +32,12 @@ func (x *regexpList) Set(s string) error {
 	*x = append(*x, re)
 	return nil
 }
+
+func (x *regexpList) AllMatch(data []byte) bool {
+	for _, r := range *x {
+		if !r.Match(data) {
+			return false
+		}
+	}
+	return true
+}

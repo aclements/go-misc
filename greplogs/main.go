@@ -25,15 +25,9 @@ import (
 
 // TODO: Option to print failure summary versus full failure message.
 
-// TODO: Option to only show failures matching regexp? Currently we
-// show all failures in files matching regexp, but sometimes you want
-// to search the failures themselves. We could pre-filter the files by
-// regexp, extract failures, and then match the failure messages. The
-// current behavior is particularly confusing since we only show the
-// failures, which may not contain the matched regexps.
-
 var (
-	flagRegexpList regexpList
+	flagRegexpList  regexpList
+	flagFailRegexps regexpList
 
 	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
 	flagMD        = flag.Bool("md", false, "output in Markdown")
@@ -44,6 +38,7 @@ func main() {
 	// XXX What I want right now is just to point it at a bunch of
 	// logs and have it extract the failures.
 	flag.Var(&flagRegexpList, "e", "show files matching `regexp`; if provided multiple times, files must match all regexps")
+	flag.Var(&flagFailRegexps, "E", "show only errors matching `regexp`; if provided multiple times, an error must match all regexps")
 	flag.Parse()
 
 	// Validate flags.
@@ -102,10 +97,8 @@ func process(path, nicePath string) (found bool, err error) {
 	}
 
 	// Check regexp match.
-	for _, re := range flagRegexpList {
-		if !re.Match(data) {
-			return false, nil
-		}
+	if !flagRegexpList.AllMatch(data) || !flagFailRegexps.AllMatch(data) {
+		return false, nil
 	}
 
 	// If this is from the dashboard, get the builder URL.
@@ -140,6 +133,11 @@ func process(path, nicePath string) (found bool, err error) {
 		if msg == "" {
 			msg = failure.Message
 		}
+
+		if len(flagFailRegexps) > 0 && !flagFailRegexps.AllMatch([]byte(msg)) {
+			continue
+		}
+
 		fmt.Printf("%s:\n", printPath)
 		if *flagMD {
 			fmt.Printf("```\n%s\n```\n\n", msg)

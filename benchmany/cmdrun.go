@@ -16,9 +16,7 @@ import (
 
 // TODO: Check CPU performance governor before each benchmark.
 
-// TODO: Mode to prioritize commits around big changes.
-
-// TODO: Flag to specify output directory.
+// TODO: Mode to prioritize commits around big performance changes.
 
 // TODO: Support running pre-built binaries without specific hashes.
 // This is useful for testing things that aren't yet committed or that
@@ -44,6 +42,7 @@ func init() {
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
 	f.StringVar(&run.benchFlags, "benchflags", "", "pass `flags` to benchmark")
 	f.IntVar(&run.iterations, "n", 5, "run each benchmark `N` times")
+	f.StringVar(&outDir, "o", "", "write binaries and logs to `directory`")
 	f.BoolVar(&run.goverSave, "gover-save", false, "save toolchain builds with gover")
 	f.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
 	registerSubcommand("run", "[flags] <revision range> - run benchmarks", cmdRun, f)

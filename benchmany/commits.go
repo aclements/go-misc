@@ -10,9 +10,13 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
+
+// outDir is the directory containing benchmark binaries and logs.
+var outDir = "."
 
 type commitInfo struct {
 	hash         string
@@ -48,7 +52,7 @@ func getCommits(revRange []string) []*commitInfo {
 	// Load current benchmark state.
 	var commits []*commitInfo
 	for i, hash := range hashes {
-		logPath := fmt.Sprintf("log.%s", hash[:7])
+		logPath := filepath.Join(outDir, fmt.Sprintf("log.%s", hash[:7]))
 		count, fails, buildFailed := countRuns(logPath)
 		commitDate, err := time.Parse(time.RFC3339, dates[i])
 		if err != nil {
@@ -59,7 +63,7 @@ func getCommits(revRange []string) []*commitInfo {
 		commit := &commitInfo{
 			hash:        hash,
 			commitDate:  commitDate,
-			binPath:     fmt.Sprintf("bench.%s", hash[:7]),
+			binPath:     filepath.Join(outDir, fmt.Sprintf("bench.%s", hash[:7])),
 			gover:       cachedHashes[hash[:7]],
 			logPath:     logPath,
 			count:       count,

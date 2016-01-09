@@ -5,18 +5,13 @@
 package main
 
 // SCModel models all loads and stores as sequentially consistent.
-// That is, there is a total order over all loads and stores.
+// That is, there is a total order over all loads and stores. It
+// implements sequential consistency using a direct operational
+// semantics.
 type SCModel struct{}
 
 func (SCModel) String() string {
 	return "SC"
-}
-
-type SCState struct {
-	// Program state.
-	mem     MemState
-	pcs     [MaxThreads]int
-	outcome Outcome
 }
 
 func (SCModel) Eval(p *Prog, outcomes *OutcomeSet) {
@@ -24,15 +19,29 @@ func (SCModel) Eval(p *Prog, outcomes *OutcomeSet) {
 	// each load instruction, and at the end of each execution
 	// record the outcome.
 	outcomes.Reset(p)
-	scRec(p, outcomes, SCState{})
+	(&scGlobal{p, outcomes}).rec(scState{})
 }
 
-func scRec(p *Prog, outcomes *OutcomeSet, s SCState) {
+// scGlobal stores state that is global to an SC evaluation.
+type scGlobal struct {
+	p        *Prog
+	outcomes *OutcomeSet
+}
+
+// scState stores the state of a program at a single point during
+// execution.
+type scState struct {
+	mem     MemState
+	pcs     [MaxThreads]int
+	outcome Outcome
+}
+
+func (g *scGlobal) rec(s scState) {
 	var opres int
 	// Pick an op to execute next.
 	any := false
-	for tid := range p.Threads {
-		op := p.Threads[tid].Ops[s.pcs[tid]]
+	for tid := range g.p.Threads {
+		op := g.p.Threads[tid].Ops[s.pcs[tid]]
 		if op.Type != OpExit {
 			any = true
 			ns := s
@@ -41,11 +50,11 @@ func scRec(p *Prog, outcomes *OutcomeSet, s SCState) {
 				ns.outcome |= Outcome(opres) << op.ID
 			}
 			ns.pcs[tid]++
-			scRec(p, outcomes, ns)
+			g.rec(ns)
 		}
 	}
 	if !any {
 		// This execution is done.
-		outcomes.Add(s.outcome)
+		g.outcomes.Add(s.outcome)
 	}
 }

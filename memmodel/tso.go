@@ -25,30 +25,39 @@ func (m TSOModel) String() string {
 	return s
 }
 
-type TSOState struct {
-	// Program state.
-	mem MemState
-	sb  [MaxThreads]struct {
-		// Per-CPU store buffer
+func (m TSOModel) Eval(p *Prog, outcomes *OutcomeSet) {
+	outcomes.Reset(p)
+	(&tsoGlobal{p, outcomes, &m}).rec(tsoState{})
+}
+
+// tsoGlobal stores state that is global to a TSO evaluation.
+type tsoGlobal struct {
+	p        *Prog
+	outcomes *OutcomeSet
+	model    *TSOModel
+}
+
+// tsoState stores the state of a program at a single point during
+// execution.
+type tsoState struct {
+	mem MemState             // Global memory state.
+	sb  [MaxThreads]struct { // Per-CPU store buffer.
+		// overlay records all stores performed by this CPU.
 		overlay MemState
-		buf     [MaxOps]byte
-		h, t    int
+		// buf, h, and t are the store buffer FIFO.
+		buf  [MaxOps]byte
+		h, t int
 	}
 	pcs     [MaxThreads]int
 	outcome Outcome
 }
 
-func (m TSOModel) Eval(p *Prog, outcomes *OutcomeSet) {
-	outcomes.Reset(p)
-	m.tsoRec(p, outcomes, TSOState{})
-}
-
-func (m TSOModel) tsoRec(p *Prog, outcomes *OutcomeSet, s TSOState) {
+func (g *tsoGlobal) rec(s tsoState) {
 	// Pick an op to execute next.
 	var opres int
 	any := false
-	for tid := range p.Threads {
-		op := p.Threads[tid].Ops[s.pcs[tid]]
+	for tid := range g.p.Threads {
+		op := g.p.Threads[tid].Ops[s.pcs[tid]]
 		if op.Type != OpExit {
 			any = true
 			ns := s
@@ -66,31 +75,31 @@ func (m TSOModel) tsoRec(p *Prog, outcomes *OutcomeSet, s TSOState) {
 				sb.buf[sb.t] = op.Var
 				sb.t++
 
-				if m.StoreMFence {
+				if g.model.StoreMFence {
 					// Flush the store buffer.
 					ns.mem |= sb.overlay
 					sb.h, sb.t = 0, 0
 				}
 			}
 			ns.pcs[tid]++
-			m.tsoRec(p, outcomes, ns)
+			g.rec(ns)
 		}
 	}
 	if !any {
 		// This execution is done. We don't care if there's
 		// stuff in the store buffers.
-		outcomes.Add(s.outcome)
+		g.outcomes.Add(s.outcome)
 		return
 	}
 
 	// Pick a store buffer to pop.
-	for tid := range p.Threads {
+	for tid := range g.p.Threads {
 		if s.sb[tid].h < s.sb[tid].t {
 			ns := s
 			sb := &ns.sb[tid]
 			ns.mem |= MemState(1 << sb.buf[sb.h])
 			sb.h++
-			m.tsoRec(p, outcomes, ns)
+			g.rec(ns)
 		}
 	}
 }

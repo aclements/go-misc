@@ -20,6 +20,12 @@ func init() {
 	}
 }
 
+func (o *Outcome) Set(op Op, result int) {
+	if result != 0 {
+		(*o) |= 1 << op.ID
+	}
+}
+
 func (o Outcome) Format(width int) string {
 	var out []byte
 	for l := 0; l < width; l++ {

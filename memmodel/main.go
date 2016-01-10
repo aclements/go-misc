@@ -28,7 +28,12 @@ type Model interface {
 	String() string
 }
 
-var models = []Model{SCModel{}, TSOModel{}, TSOModel{StoreMFence: true}}
+var models = []Model{
+	SCModel{},
+	TSOModel{},
+	TSOModel{StoreMFence: true},
+	HBModel{HBSC{}},
+}
 
 const showProgs = false // TODO: Make the operation mode a flag.
 

@@ -37,6 +37,15 @@ const (
 	OpLoad
 )
 
+type PC struct {
+	// TID is the thread ID. I is the instruction index.
+	TID, I int
+}
+
+func (p *Prog) OpAt(pc PC) Op {
+	return p.Threads[pc.TID].Ops[pc.I]
+}
+
 func (p *Prog) String() string {
 	out := []string{}
 

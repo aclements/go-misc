@@ -25,9 +25,12 @@ import (
 
 type Model interface {
 	Eval(p *Prog, outcomes *OutcomeSet)
+	String() string
 }
 
 var models = []Model{SCModel{}, TSOModel{}, TSOModel{StoreMFence: true}}
+
+const showProgs = false // TODO: Make the operation mode a flag.
 
 func main() {
 	flagOut := flag.String("o", "", "continuously write model graph to `output` dot file")
@@ -47,13 +50,22 @@ func main() {
 	n := 0
 	outcomes := make([]OutcomeSet, len(models))
 	for p := range GenerateProgs() {
-		if n%10 == 0 {
+		if !showProgs && n%10 == 0 {
 			fmt.Fprintf(os.Stderr, "\r%d progs", n)
 		}
 		n++
 
 		for i, model := range models {
 			model.Eval(&p, &outcomes[i])
+		}
+
+		if showProgs {
+			fmt.Println(&p)
+			names := []string{}
+			for _, model := range models {
+				names = append(names, model.String())
+			}
+			printOutcomeTable(os.Stdout, names, outcomes)
 		}
 
 		for i := range counterexamples {

@@ -40,6 +40,7 @@ const showProgs = false // TODO: Make the operation mode a flag.
 
 func main() {
 	flagOut := flag.String("o", "", "continuously write model graph to `output` dot file")
+	flagNoSimplify := flag.Bool("no-simplify", false, "disable graph simplification")
 	flag.Parse()
 	if flag.NArg() > 0 {
 		flag.Usage()
@@ -106,7 +107,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
-			writeModelGraph(f, counterexamples)
+			writeModelGraph(f, counterexamples, !*flagNoSimplify)
 			f.Close()
 		}
 	}
@@ -122,25 +123,23 @@ func main() {
 		}
 		defer f.Close()
 	}
-	writeModelGraph(f, counterexamples)
+	writeModelGraph(f, counterexamples, !*flagNoSimplify)
 }
 
-func writeModelGraph(w io.Writer, counterexamples [][]Prog) {
-	// TODO: Find maximal cliques and compact them in to single
-	// nodes. That should turn the non-strict partial order into a
-	// strict partial order and declutter things. We could then
-	// run a transitive reduction.
-
+func writeModelGraph(w io.Writer, counterexamples [][]Prog, simplify bool) {
 	fmt.Fprintln(w, "digraph memmodel {")
-	fmt.Fprintln(w, "label=\"A -> B means A is stronger than or equal to B\";")
-
-	// Add all nodes. This is necessary if some model isn't
-	// comparable to anything.
-	for _, model := range models {
-		fmt.Fprintf(w, "%q;\n", model)
+	if simplify {
+		fmt.Fprintln(w, "label=\"A -> B means A is stronger than B\";")
+	} else {
+		fmt.Fprintln(w, "label=\"A -> B means A is stronger than or equal to B\";")
 	}
 
-	// Add edges.
+	// Create Graph.
+	g := new(Graph)
+	nodes := []*GNode{}
+	for _, model := range models {
+		nodes = append(nodes, g.NewNode(model.String()))
+	}
 	for i := range counterexamples {
 		for j, p := range counterexamples[i] {
 			if i == j {
@@ -149,7 +148,7 @@ func writeModelGraph(w io.Writer, counterexamples [][]Prog) {
 			if p.Threads[0].Ops[0].Type == OpExit {
 				// No counterexample. Model i is
 				// stronger than or equal to model j.
-				fmt.Fprintf(w, "%q -> %q;\n", models[i], models[j])
+				g.Edge(nodes[i], nodes[j])
 			} else {
 				// Print the counter example. Model i
 				// is weaker than model j.
@@ -159,5 +158,22 @@ func writeModelGraph(w io.Writer, counterexamples [][]Prog) {
 			}
 		}
 	}
+
+	if simplify {
+		// Reduce equivalence classes to single nodes. Because
+		// this is currently a non-strict partial order,
+		// maximal cliques correspond to equivalence classes
+		// and are unambiguous. This makes the graph a strict
+		// partial order.
+		cliques := g.MaximalCliques()
+		g = g.CollapseNodes(cliques)
+		// Now that we have a strict partial order (a DAG),
+		// remove edges that are implied by other edges.
+		g.TransitiveReduction()
+	}
+
+	// Print graph.
+	g.ToDot(w, "")
+
 	fmt.Fprintln(w, "}")
 }

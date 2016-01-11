@@ -30,23 +30,37 @@ func (m HBModel) String() string {
 // TODO: Given how stateless this is, we could precompute all n^2
 // results.
 type HBGenerator interface {
-	// HappensBefore returns true if instruction i globally
+	// HappensBefore returns whether instruction i globally
 	// happens before instruction j, assuming that i was executed
 	// before j.
 	//
-	// It does not necessarily return all happens-before edges;
-	// only enough so that the transitive closure of the returned
-	// graph is the full global happens-before graph.
+	// It returns HBHappensBefore if i globally happens before j.
+	// It does *not* return program order happens-before relations
+	// unless they are part of the global happens-before graph.
+	// Each thread implicitly has a local happens-before graph
+	// that combines the global happens-before graph with the
+	// local program order.
 	//
-	// It does not return program order edges unless they are part
-	// of the global happens before graph. Each thread implicitly
-	// has a local happens before graph that combines the global
-	// happens before graph with the local program order.
-	HappensBefore(p *Prog, i, j PC) bool
+	// It returns HBConcurrent if i happens concurrently with j (i
+	// neither happens before nor after j). However, the
+	// transitive closure of other happens-before relations may
+	// still imply that i happens before j.
+	//
+	// It returns HBConditional if i happens before j only if j
+	// observes i.
+	HappensBefore(p *Prog, i, j PC) HBType
 
 	// String returns a string representation of this HBGenerator.
 	String() string
 }
+
+type HBType int
+
+const (
+	HBConcurrent HBType = iota
+	HBHappensBefore
+	HBConditional
+)
 
 func (m HBModel) Eval(p *Prog, outcomes *OutcomeSet) {
 	var seqBuf [MaxTotalOps]PC
@@ -163,6 +177,7 @@ func (g *hbGlobal) rec(s hbState) {
 		ns := s
 		thisPC := PC{tid, s.pcs[tid]}
 		g.sequence = append(g.sequence, thisPC)
+		ns.pcs[tid]++
 
 		// Add a node for this instruction to the global
 		// happens-before graph.
@@ -176,7 +191,7 @@ func (g *hbGlobal) rec(s hbState) {
 				continue
 			}
 
-			if g.model.Gen.HappensBefore(g.p, g.sequence[prev], thisPC) {
+			if g.model.Gen.HappensBefore(g.p, g.sequence[prev], thisPC) == HBHappensBefore {
 				// Add global "prev -> this" edge and
 				// the transitive closure.
 				node |= (1 << uint(prev)) | g.graph.nodes[prev]
@@ -196,9 +211,19 @@ func (g *hbGlobal) rec(s hbState) {
 				if g.sequence[ld].TID == tid || g.graph.happenedBefore(ld, this) {
 					continue
 				}
+				// If the store conditionally happens
+				// before the load, then, again, the
+				// load must be 0 because making it 1
+				// would mean it observed the store,
+				// which would add a happens-before
+				// graph that goes against the
+				// sequential order.
+				if g.model.Gen.HappensBefore(g.p, thisPC, g.sequence[ld]) == HBConditional {
+					continue
+				}
 				// Otherwise, the load happened
 				// concurrently with the store, so it
-				// can also be 1.
+				// can be 0 or 1.
 				ldpc := g.sequence[ld]
 				ns.allow1.Set(g.p.OpAt(ldpc), 1)
 			}
@@ -209,8 +234,10 @@ func (g *hbGlobal) rec(s hbState) {
 			// Find stores to this variable that have
 			// already executed.
 			var mustBe1, any bool
+			var lastStore int
 			for _, st := range g.vars[op.Var].stores {
 				any = true
+				lastStore = st
 				// If this store locally happened
 				// before the load, the load must be
 				// 1.
@@ -227,8 +254,30 @@ func (g *hbGlobal) rec(s hbState) {
 				// happened before the load, then the
 				// load happened concurrently with the
 				// stores, so it may be 0 or 1.
-				ns.allow0.Set(op, 1)
-				ns.allow1.Set(op, 1)
+				if g.model.Gen.HappensBefore(g.p, g.sequence[lastStore], thisPC) == HBConditional {
+					// There are two
+					// possibilities: 1) the load
+					// doesn't observe the store,
+					// then it must read 0, but
+					// this doesn't introduce an
+					// edge.
+					ns0 := ns
+					ns0.allow0.Set(op, 1)
+					g.rec(ns0)
+
+					// Or 2) the load observes the
+					// store, so it must read 1
+					// and introduces an edge.
+					node |= (1 << uint(lastStore)) | g.graph.nodes[lastStore]
+					g.graph.nodes[len(g.graph.nodes)-1] = node
+					ns.allow1.Set(op, 1)
+				} else {
+					// The load and store really
+					// are concurrent, so anything
+					// can happen.
+					ns.allow0.Set(op, 1)
+					ns.allow1.Set(op, 1)
+				}
 			} else {
 				// Otherwise, it's definitely possible
 				// for it to be 0. There may also be a
@@ -236,23 +285,25 @@ func (g *hbGlobal) rec(s hbState) {
 				// concurrently; if we find one, we'll
 				// allow 1 at that point.
 				ns.allow0.Set(op, 1)
+				varOpArray = &g.vars[op.Var].loads
 			}
-
-			varOpArray = &g.vars[op.Var].loads
 
 		default:
 			panic("unknown op")
 		}
 
 		// Associate this operation with the variable.
-		*varOpArray = append(*varOpArray, this)
+		if varOpArray != nil {
+			*varOpArray = append(*varOpArray, this)
+		}
 
-		ns.pcs[tid]++
 		g.rec(ns)
 
 		g.sequence = g.sequence[:len(g.sequence)-1]
 		g.graph.nodes = g.graph.nodes[:len(g.graph.nodes)-1]
-		*varOpArray = (*varOpArray)[:len(*varOpArray)-1]
+		if varOpArray != nil {
+			*varOpArray = (*varOpArray)[:len(*varOpArray)-1]
+		}
 	}
 	if !any {
 		// This execution is done. Expand out the full set of

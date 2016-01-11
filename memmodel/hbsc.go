@@ -7,8 +7,8 @@ package main
 // HBSC is a HBGenerator that implements sequential consistency.
 type HBSC struct{}
 
-func (HBSC) HappensBefore(p *Prog, i, j PC) bool {
-	return true
+func (HBSC) HappensBefore(p *Prog, i, j PC) HBType {
+	return HBHappensBefore
 }
 
 func (HBSC) String() string {

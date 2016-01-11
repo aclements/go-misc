@@ -4,15 +4,49 @@
 
 // Command memmodel is a memory model model checker.
 //
-// It generates a large number of "litmus test" programs consisting of
-// reads and writes of variables on multiple threads. For each
-// program, it determines all permissible outcomes under different
-// memory models (currently SC, TSO, and TSO with memory barriers
-// after stores) and determines which memory models are weaker or
-// stronger than which others. It produces a dot graph of the partial
-// order of memory model strength and, for every pair of models A and
-// B where A is weaker than B, it gives an example program where A
-// permits outcomes that B excludes.
+// memmodel compares the relative strengths of different memory models
+// using model checking techniques. It determines (up to typical
+// limitations of model checking) which memory models are equivalent,
+// stronger, and weaker than others, and produces this partial order
+// as well as example programs that demonstrate the differences
+// between non-equivalent memory models.
+//
+//
+// Output
+//
+// memmodel generates a dot graph showing the partial order of memory
+// models. Each node shows a set of equivalently strong memory models
+// and edges point from the stronger models to the weaker models.
+//
+// TODO: Do a better job of outputting example programs.
+//
+//
+// Supported memory models
+//
+// memmodel supports strict consistency (SC), x86-style total store
+// order (TSO), acquire/release, and unordered memory models.
+//
+// Some of these memory models have two different, but equivalent
+// specification strategies. Any model followed by "(HB)" is specified
+// as a set rules for constructing a happens-before graph. Otherwise,
+// the model is specified as an non-deterministic operational machine
+// (e.g., TSO is implemented in terms of store buffers and store
+// buffer forwarding). Operational machines tend to be easier to
+// reason about, but the happens-before model is extremely flexible.
+// Having both helps ensure that our specifications are what we
+// intended.
+//
+// Likewise, some models have options. The operational implementation
+// of TSO supports optional memory fences around loads and stores.
+//
+//
+// How it works
+//
+// memmodel generates a large number of "litmus test" programs, where
+// each program consists of a set of threads reading and writing
+// shared variables. For each program, it determines all permissible
+// outcomes under each memory model. If an outcome is permitted by
+// memory model A but not memory model B, then A is weaker than B.
 package main
 
 import (

@@ -133,12 +133,22 @@ func printOutcomeTable(w io.Writer, cols []string, outcomes []OutcomeSet) error 
 		if _, err := fmt.Fprint(w, outcome.Format(allOutcomes.numLoads)); err != nil {
 			return err
 		}
+		var haveY, haveN bool
 		for i := range cols {
-			ch := 'N'
+			var ch rune
 			if outcomes[i].Has(outcome) {
 				ch = 'Y'
+				haveY = true
+			} else {
+				ch = 'N'
+				haveN = true
 			}
 			if _, err := fmt.Fprintf(w, "  %-*c", widths[i], ch); err != nil {
+				return err
+			}
+		}
+		if haveY && haveN {
+			if _, err := fmt.Fprintf(w, " *"); err != nil {
 				return err
 			}
 		}

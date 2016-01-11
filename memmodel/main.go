@@ -35,6 +35,8 @@ var models = []Model{
 	TSOModel{MFenceLoad: true},
 	HBModel{HBSC{}},
 	HBModel{HBTSO{}},
+	HBModel{HBAcqRel{}},
+	HBModel{HBUnordered{}},
 }
 
 // TODO: Make the operation mode a flag. Also have a mode for only

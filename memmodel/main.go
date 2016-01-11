@@ -24,9 +24,9 @@
 // With -examples, it outputs programs and outcomes showing the
 // differences between non-equivalent memory models.
 //
-// With -all-progs, outputs all programs it generates along with the
-// outcomes allowed by all of the models. This is mostly useful for
-// debugging.
+// With -all-progs, it outputs all programs it generates along with
+// the outcomes allowed by all of the models. This is mostly useful
+// for debugging.
 //
 //
 // Supported memory models

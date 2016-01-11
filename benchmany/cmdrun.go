@@ -154,7 +154,7 @@ func pickCommitSpread(commits []*commitInfo) *commitInfo {
 		haveAny := false
 		for i, lcommit := range commits {
 			if lcommit.count > 0 {
-				leftDistance = 0
+				leftDistance = 1
 				haveAny = true
 			} else if lcommit.runnable() {
 				leftDistance++
@@ -163,7 +163,7 @@ func pickCommitSpread(commits []*commitInfo) *commitInfo {
 			ri := len(commits) - i - 1
 			rcommit := commits[ri]
 			if rcommit.count > 0 {
-				rightDistance = 0
+				rightDistance = 1
 			} else if rcommit.runnable() {
 				rightDistance++
 			}

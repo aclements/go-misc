@@ -150,37 +150,42 @@ func pickCommitSpread(commits []*commitInfo) *commitInfo {
 	} else {
 		// Pick a new commit weighted by its distance from a
 		// commit that we already have.
-		leftDistance, rightDistance := len(commits), len(commits)
+
+		// Find distance from left to right.
+		distance := len(commits)
 		haveAny := false
-		for i, lcommit := range commits {
-			if lcommit.count > 0 {
-				leftDistance = 1
+		for i, commit := range commits {
+			if commit.count > 0 {
+				distance = 1
 				haveAny = true
-			} else if lcommit.runnable() {
-				leftDistance++
+			} else if commit.runnable() {
+				distance++
+			}
+			weights[i] = distance
+		}
+
+		// Find distance from right to left.
+		distance = len(commits)
+		for i := len(commits) - 1; i >= 0; i-- {
+			commit := commits[i]
+			if commit.count > 0 {
+				distance = 1
+			} else if commit.runnable() {
+				distance++
 			}
 
-			ri := len(commits) - i - 1
-			rcommit := commits[ri]
-			if rcommit.count > 0 {
-				rightDistance = 1
-			} else if rcommit.runnable() {
-				rightDistance++
-			}
-
-			if i <= ri || leftDistance < weights[i] {
-				weights[i] = leftDistance
-			}
-			if i < ri || rightDistance < weights[ri] {
-				weights[ri] = rightDistance
+			if distance < weights[i] {
+				weights[i] = distance
 			}
 		}
+
 		if !haveAny {
 			// We don't have any commits. Pick one uniformly.
 			for i := range commits {
 				weights[i] = 1
 			}
 		}
+
 		// Zero non-runnable commits.
 		for i, commit := range commits {
 			if !commit.runnable() {

@@ -33,6 +33,7 @@ var models = []Model{
 	TSOModel{},
 	TSOModel{StoreMFence: true},
 	HBModel{HBSC{}},
+	HBModel{HBTSO{}},
 }
 
 const showProgs = false // TODO: Make the operation mode a flag.

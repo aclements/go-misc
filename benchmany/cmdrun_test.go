@@ -4,7 +4,10 @@
 
 package main
 
-import "testing"
+import (
+	"math/rand"
+	"testing"
+)
 
 func TestPickSpread(t *testing.T) {
 	run.iterations = 5
@@ -20,14 +23,21 @@ func TestPickSpread(t *testing.T) {
 			if commit == nil {
 				break
 			}
-			commit.count++
+
+			if rand.Intn(50) == 0 {
+				commit.buildFailed = true
+			} else if rand.Intn(50) == 1 {
+				commit.fails++
+			} else {
+				commit.count++
+			}
 		}
 
 		// Test that all of the commits ran the expected
 		// number of times.
 		for _, c := range commits {
-			if c.count != run.iterations {
-				t.Fatalf("commit picked %d times; want %d", c.count, run.iterations)
+			if c.runnable() {
+				t.Fatalf("commit still runnable %+v", c)
 			}
 		}
 	}

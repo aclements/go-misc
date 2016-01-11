@@ -15,12 +15,18 @@ type TSOModel struct {
 	// StoreMFence, if true, adds an MFENCE after store
 	// operations.
 	StoreMFence bool
+
+	// MFenceLoad, if true, add an MFENCE before load operations.
+	MFenceLoad bool
 }
 
 func (m TSOModel) String() string {
 	s := "TSO"
 	if m.StoreMFence {
 		s += "+store MFENCE"
+	}
+	if m.MFenceLoad {
+		s += "+MFENCE load"
 	}
 	return s
 }
@@ -64,6 +70,12 @@ func (g *tsoGlobal) rec(s tsoState) {
 			sb := &ns.sb[tid]
 			switch op.Type {
 			case OpLoad:
+				if g.model.MFenceLoad {
+					// Flush the store buffer.
+					ns.mem |= sb.overlay
+					sb.h, sb.t = 0, 0
+				}
+
 				// Combining the global memory and the
 				// overlay simulates store buffer
 				// forwarding.

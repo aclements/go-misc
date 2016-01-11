@@ -32,6 +32,7 @@ var models = []Model{
 	SCModel{},
 	TSOModel{},
 	TSOModel{StoreMFence: true},
+	TSOModel{MFenceLoad: true},
 	HBModel{HBSC{}},
 	HBModel{HBTSO{}},
 }

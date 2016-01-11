@@ -14,11 +14,19 @@
 //
 // Output
 //
-// memmodel generates a dot graph showing the partial order of memory
-// models. Each node shows a set of equivalently strong memory models
-// and edges point from the stronger models to the weaker models.
+// memmodel supports several modes of output.
 //
-// TODO: Do a better job of outputting example programs.
+// With -graph, it generates a dot graph showing the partial order of
+// memory models. Each node shows a set of equivalently strong memory
+// models and edges point from the stronger models to the weaker
+// models.
+//
+// With -examples, it outputs programs and outcomes showing the
+// differences between non-equivalent memory models.
+//
+// With -all-progs, outputs all programs it generates along with the
+// outcomes allowed by all of the models. This is mostly useful for
+// debugging.
 //
 //
 // Supported memory models
@@ -50,6 +58,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -73,13 +82,29 @@ var models = []Model{
 	HBModel{HBUnordered{}},
 }
 
-// TODO: Make the operation mode a flag. Also have a mode for only
-// showing where the models differ.
-const showProgs = false
+type Counterexample struct {
+	p                Prog
+	weaker, stronger Model
+	wset, sset       OutcomeSet
+}
+
+func (c *Counterexample) Print(w io.Writer) {
+	fmt.Fprintf(w, "%s is weaker than %s\n%s\n", c.weaker, c.stronger, &c.p)
+	printOutcomeTable(w, []string{c.weaker.String(), c.stronger.String()}, []OutcomeSet{c.wset, c.sset})
+}
 
 func main() {
-	flagOut := flag.String("o", "", "continuously write model graph to `output` dot file")
+	flagGraph := flag.String("graph", "", "write model graph to `output` dot file")
 	flagNoSimplify := flag.Bool("no-simplify", false, "disable graph simplification")
+	// TODO: If we were to write the examples repeatedly like we
+	// do for the graph, we could do the same graph reduction and
+	// only print a minimal set of examples.
+	flagExamples := flag.Bool("examples", false, "show examples where models differ")
+	// TODO: These big tables would be pretty nice if we could
+	// filter out the noise (e.g., only show them when models
+	// disagree, order the columns from stronger to weaker,
+	// collapse equivalent models).
+	flagAllProgs := flag.Bool("all-progs", false, "show all programs and outcomes")
 	flag.Parse()
 	if flag.NArg() > 0 {
 		flag.Usage()
@@ -88,15 +113,15 @@ func main() {
 
 	// counterexamples[i][j] gives an example program where model
 	// i permits outcomes that model j does not.
-	counterexamples := make([][]Prog, len(models))
+	counterexamples := make([][]*Counterexample, len(models))
 	for i := range counterexamples {
-		counterexamples[i] = make([]Prog, len(models))
+		counterexamples[i] = make([]*Counterexample, len(models))
 	}
 
 	n := 0
 	outcomes := make([]OutcomeSet, len(models))
 	for p := range GenerateProgs() {
-		if !showProgs && n%10 == 0 {
+		if !(*flagAllProgs || *flagExamples) && n%10 == 0 {
 			fmt.Fprintf(os.Stderr, "\r%d progs", n)
 		}
 		n++
@@ -105,7 +130,7 @@ func main() {
 			model.Eval(&p, &outcomes[i])
 		}
 
-		if showProgs {
+		if *flagAllProgs {
 			fmt.Println(&p)
 			names := []string{}
 			for _, model := range models {
@@ -120,7 +145,7 @@ func main() {
 				if i == j {
 					continue
 				}
-				if counterexamples[i][j].Threads[0].Ops[0].Type != OpExit {
+				if counterexamples[i][j] != nil {
 					// Already have a counterexample.
 					continue
 				}
@@ -131,18 +156,26 @@ func main() {
 					// Model i permits outcomes
 					// that model j does not. (i
 					// is weaker than j.)
-					counterexamples[i][j] = p
+					c := &Counterexample{
+						p, models[i], models[j],
+						outcomes[i], outcomes[j],
+					}
+					counterexamples[i][j] = c
+					if *flagExamples {
+						c.Print(os.Stdout)
+						fmt.Println()
+					}
 				}
 				// TODO: Prefer smaller
 				// counterexamples.
 			}
 		}
 
-		if n%100 == 0 && *flagOut != "" {
+		if n%100 == 0 && *flagGraph != "" {
 			// dot uses inotify wrong, so it doesn't
 			// notice if we write to a temp file and
 			// rename it over the output file.
-			f, err := os.Create(*flagOut)
+			f, err := os.Create(*flagGraph)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
@@ -153,20 +186,19 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "\r%d progs\n", n)
 
-	f := os.Stdout
-	if *flagOut != "" {
-		var err error
-		f, err = os.Create(*flagOut)
+	// Write final graph.
+	if *flagGraph != "" {
+		f, err := os.Create(*flagGraph)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		defer f.Close()
+		writeModelGraph(f, counterexamples, !*flagNoSimplify)
 	}
-	writeModelGraph(f, counterexamples, !*flagNoSimplify)
 }
 
-func writeModelGraph(w io.Writer, counterexamples [][]Prog, simplify bool) {
+func writeModelGraph(w io.Writer, counterexamples [][]*Counterexample, simplify bool) {
 	fmt.Fprintln(w, "digraph memmodel {")
 	if simplify {
 		fmt.Fprintln(w, "label=\"A -> B means A is stronger than B\";")
@@ -181,20 +213,20 @@ func writeModelGraph(w io.Writer, counterexamples [][]Prog, simplify bool) {
 		nodes = append(nodes, g.NewNode(model.String()))
 	}
 	for i := range counterexamples {
-		for j, p := range counterexamples[i] {
+		for j, ce := range counterexamples[i] {
 			if i == j {
 				continue
 			}
-			if p.Threads[0].Ops[0].Type == OpExit {
+			if ce == nil {
 				// No counterexample. Model i is
 				// stronger than or equal to model j.
 				g.Edge(nodes[i], nodes[j])
 			} else {
-				// Print the counter example. Model i
-				// is weaker than model j.
-				fmt.Fprintf(w, "# %q is weaker than %q;\n", models[i], models[j])
-				fmt.Fprintln(w, "# "+strings.Replace(p.String(), "\n", "\n# ", -1))
-				// TODO: Print an example of why.
+				var buf bytes.Buffer
+				// Model i is weaker than model j.
+				// Print the counter example.
+				ce.Print(&buf)
+				fmt.Fprintf(w, "# %s\n", strings.Replace(buf.String(), "\n", "\n# ", -1))
 			}
 		}
 	}

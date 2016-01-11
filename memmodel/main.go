@@ -36,7 +36,9 @@ var models = []Model{
 	HBModel{HBTSO{}},
 }
 
-const showProgs = false // TODO: Make the operation mode a flag.
+// TODO: Make the operation mode a flag. Also have a mode for only
+// showing where the models differ.
+const showProgs = false
 
 func main() {
 	flagOut := flag.String("o", "", "continuously write model graph to `output` dot file")
@@ -73,6 +75,7 @@ func main() {
 				names = append(names, model.String())
 			}
 			printOutcomeTable(os.Stdout, names, outcomes)
+			fmt.Println()
 		}
 
 		for i := range counterexamples {

@@ -75,8 +75,9 @@ func cmdRun() {
 	defer status.Stop()
 
 	for {
-		doneIters, totalIters, doneCommits, failedCommits := runStats(commits)
-		msg := fmt.Sprintf("%d/%d iterations, %d/%d commits (%d failed)", doneIters, totalIters, doneCommits+failedCommits, len(commits), failedCommits)
+		doneIters, totalIters, partialCommits, doneCommits, failedCommits := runStats(commits)
+		unstartedCommits := len(commits) - (partialCommits + doneCommits + failedCommits)
+		msg := fmt.Sprintf("%d/%d runs, %d unstarted+%d partial+%d done+%d failed commits", doneIters, totalIters, unstartedCommits, partialCommits, doneCommits, failedCommits)
 		// TODO: Count builds and runs separately.
 		status.Progress(msg, float64(doneIters)/float64(totalIters))
 
@@ -88,16 +89,21 @@ func cmdRun() {
 	}
 }
 
-func runStats(commits []*commitInfo) (doneIters, totalIters, doneCommits, failedCommits int) {
+func runStats(commits []*commitInfo) (doneIters, totalIters, partialCommits, doneCommits, failedCommits int) {
 	for _, c := range commits {
 		if c.count >= run.iterations {
 			// Don't care if it failed.
 			doneIters += c.count
 			totalIters += c.count
-			doneCommits++
 		} else if c.runnable() {
 			doneIters += c.count
 			totalIters += run.iterations
+		}
+
+		if c.count == run.iterations {
+			doneCommits++
+		} else if c.runnable() {
+			partialCommits++
 		} else {
 			failedCommits++
 		}

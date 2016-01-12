@@ -127,6 +127,10 @@ func (sr *StatusReporter) loop(updates <-chan statusUpdate) {
 		} else {
 			eta = ", ETA " + eta
 		}
+		// TODO: This isn't quite right. If we hit the right
+		// edge of the terminal, it won't wrap, but the
+		// right-most character will be the *last* character
+		// in the string, since terminal keeps overwriting it.
 		fmt.Printf("%s%s%s%s%s", resetLine, wrapOff, msg, eta, wrapOn)
 	}
 }

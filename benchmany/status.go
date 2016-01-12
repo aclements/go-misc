@@ -58,8 +58,8 @@ func (sr *StatusReporter) Stop() {
 
 func (sr *StatusReporter) loop(updates <-chan statusUpdate) {
 	const resetLine = "\r\x1b[2K"
-	const wrapOff = "\x1b[7l"
-	const wrapOn = "\x1b[7h"
+	const wrapOff = "\x1b[?7l"
+	const wrapOn = "\x1b[?7h"
 
 	tick := time.NewTicker(time.Second / 4)
 	defer tick.Stop()

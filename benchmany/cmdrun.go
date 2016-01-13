@@ -232,15 +232,17 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 	if !exists(commit.binPath) {
 		runStatus(status, commit, "building")
 
+		// Check out the appropriate commit. This is necessary
+		// even if we're using gover because the benchmark
+		// itself might have changed (e.g., bug fixes).
+		git("checkout", "-q", commit.hash)
+
 		var buildCmd []string
 		if commit.gover {
 			// TODO: It would be better if gover took a
 			// long hash and did the right thing.
 			buildCmd = []string{"gover", "run", commit.hash[:7], "go"}
 		} else {
-			// Check out the appropriate commit.
-			git("checkout", "-q", commit.hash)
-
 			// If this is the Go toolchain, do a full
 			// make.bash. Otherwise, we assume that go
 			// test -c will build the necessary

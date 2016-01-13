@@ -103,7 +103,9 @@ func runStats(commits []*commitInfo) (doneIters, totalIters, partialCommits, don
 		if c.count == run.iterations {
 			doneCommits++
 		} else if c.runnable() {
-			partialCommits++
+			if c.count != 0 {
+				partialCommits++
+			}
 		} else {
 			failedCommits++
 		}

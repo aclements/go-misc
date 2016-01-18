@@ -297,7 +297,12 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 		args = []string{"-test.run", "NONE", "-test.bench", "."}
 	}
 	args = append(args, strings.Fields(run.benchFlags)...)
-	cmd := exec.Command("./"+commit.binPath, args...)
+	name := commit.binPath
+	if filepath.Base(name) == name {
+		// Make exec.Command treat this as a relative path.
+		name = "./" + name
+	}
+	cmd := exec.Command(name, args...)
 	if dryRun {
 		dryPrint(cmd)
 		commit.count++

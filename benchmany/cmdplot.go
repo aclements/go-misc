@@ -37,6 +37,7 @@ func init() {
 		f.PrintDefaults()
 	}
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
+	f.StringVar(&outDir, "o", "", "read binaries and logs from `directory`")
 	f.StringVar(&plot.baseline, "baseline", "", "normalize to `revision`; revision may be \"first\" or \"last\"")
 	f.BoolVar(&plot.json, "json", false, "emit data in JSON")
 	f.BoolVar(&plot.filter, "filter", false, "KZA filter benchmark results to reduce noise")

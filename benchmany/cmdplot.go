@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"math"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aclements/go-moremath/stats"
@@ -21,14 +23,14 @@ var cmdPlotFlags = flag.NewFlagSet(os.Args[0]+" plot", flag.ExitOnError)
 var plot struct {
 	baseline string
 	json     bool
+	html     bool
+	title    string
 	filter   bool
 }
 
-// Currently I'm plotting this using gnuplot:
+// To plot this in Gnuplot, use for example:
 //
 // plot for [i=3:50] 'data' using 0:i index "ns/op" with l title columnhead
-
-// TODO: HTML output using Google Charts?
 
 func init() {
 	f := cmdPlotFlags
@@ -40,6 +42,8 @@ func init() {
 	f.StringVar(&outDir, "o", "", "read binaries and logs from `directory`")
 	f.StringVar(&plot.baseline, "baseline", "", "normalize to `revision`; revision may be \"first\" or \"last\"")
 	f.BoolVar(&plot.json, "json", false, "emit data in JSON")
+	f.BoolVar(&plot.html, "html", false, "emit data in HTML")
+	f.StringVar(&plot.title, "title", "", "title for HTML output")
 	f.BoolVar(&plot.filter, "filter", false, "KZA filter benchmark results to reduce noise")
 	registerSubcommand("plot", "[flags] <revision range> - print benchmark results", cmdPlot, f)
 }
@@ -204,13 +208,30 @@ func cmdPlot() {
 		}
 	}
 
-	if plot.json {
+	if plot.json || plot.html {
 		var jsonTables []JSONTable
 		for i, table := range tables {
 			jsonTables = append(jsonTables, JSONTable{units[i], table})
 		}
-		if err := json.NewEncoder(os.Stdout).Encode(jsonTables); err != nil {
-			log.Fatal(err)
+		if plot.json {
+			if err := json.NewEncoder(os.Stdout).Encode(jsonTables); err != nil {
+				log.Fatal(err)
+			}
+		} else {
+			title := plot.title
+			if plot.filter {
+				title += ". Low-pass filtered with KZA(15,3)."
+			}
+
+			t := template.Must(template.New("plot").Parse(plotHTML))
+			err := t.Execute(os.Stdout, map[string]interface{}{
+				"Revs":   strings.Join(cmdPlotFlags.Args(), " "),
+				"Tables": jsonTables,
+				"Title":  title,
+			})
+			if err != nil {
+				log.Fatal(err)
+			}
 		}
 	} else {
 		// Print tables.

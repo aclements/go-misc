@@ -127,7 +127,7 @@ func git(subcmd string, args ...string) string {
 	}
 	out, err := cmd.Output()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "git %s failed: %s", args, err)
+		fmt.Fprintf(os.Stderr, "git %s failed: %s", shellEscapeList(gitargs), err)
 		os.Exit(1)
 	}
 	return string(out)
@@ -156,6 +156,14 @@ func shellEscape(x string) string {
 		return "'" + strings.Replace(x, "'", "'\"'\"'", -1) + "'"
 	}
 	return x
+}
+
+func shellEscapeList(xs []string) string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = shellEscape(x)
+	}
+	return strings.Join(out, " ")
 }
 
 func exists(path string) bool {

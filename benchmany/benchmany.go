@@ -127,7 +127,7 @@ func git(subcmd string, args ...string) string {
 	}
 	out, err := cmd.Output()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "git %s failed: %s", shellEscapeList(gitargs), err)
+		fmt.Fprintf(os.Stderr, "git %s failed: %s\n", shellEscapeList(gitargs), err)
 		os.Exit(1)
 	}
 	return string(out)

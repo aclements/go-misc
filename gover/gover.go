@@ -343,7 +343,10 @@ func doList() {
 }
 
 func doRun(name string, cmd []string) {
-	savePath, _ := getSavePath(name)
+	savePath, ok := getSavePath(name)
+	if !ok {
+		log.Fatalf("unknown name `%s'", name)
+	}
 
 	c := exec.Command(filepath.Join(savePath, "bin", cmd[0]), cmd[1:]...)
 	c.Env = append([]string(nil), os.Environ()...)

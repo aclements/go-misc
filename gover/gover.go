@@ -25,15 +25,11 @@ import (
 )
 
 var (
-	verbose = flag.Bool("v", false, "print commands being run")
-	verDir  = flag.String("dir", defaultVerDir(), "`directory` of saved Go roots")
-	noDedup = flag.Bool("no-dedup", false, "disable deduplication of saved trees")
+	verbose    = flag.Bool("v", false, "print commands being run")
+	verDir     = flag.String("dir", defaultVerDir(), "`directory` of saved Go roots")
+	noDedup    = flag.Bool("no-dedup", false, "disable deduplication of saved trees")
+	gorootFlag = flag.String("C", defaultGoroot(), "use `dir` as the root of the Go tree for save and build")
 )
-
-// TODO: Is this is sane default? If your working directory is another
-// Go tree and you do a 'save' or a 'build', this is probably
-// surprising.
-var goroot = runtime.GOROOT()
 
 var binTools = []string{"go", "godoc", "gofmt"}
 
@@ -50,6 +46,24 @@ func defaultVerDir() string {
 		cache = filepath.Join(home, ".cache")
 	}
 	return filepath.Join(cache, "gover")
+}
+
+func defaultGoroot() string {
+	c := exec.Command("git", "rev-parse", "--show-cdup")
+	output, err := c.Output()
+	if err != nil {
+		return ""
+	}
+	goroot := strings.TrimSpace(string(output))
+	if goroot == "" {
+		// The empty string is --show-cdup's helpful way of
+		// saying "the current directory".
+		goroot = "."
+	}
+	if st, err := os.Stat(filepath.Join(goroot, "src", "cmd", "go")); err != nil || !st.IsDir() {
+		return ""
+	}
+	return goroot
 }
 
 func main() {
@@ -71,6 +85,14 @@ func main() {
 	if flag.NArg() < 1 {
 		flag.Usage()
 		os.Exit(2)
+	}
+
+	// Make gorootFlag absolute.
+	if *gorootFlag != "" {
+		abs, err := filepath.Abs(*gorootFlag)
+		if err != nil {
+			*gorootFlag = abs
+		}
 	}
 
 	switch flag.Arg(0) {
@@ -165,8 +187,15 @@ func main() {
 	}
 }
 
+func goroot() string {
+	if *gorootFlag == "" {
+		log.Fatal("not a git repository")
+	}
+	return *gorootFlag
+}
+
 func gitCmd(cmd string, args ...string) string {
-	args = append([]string{"-C", goroot, cmd}, args...)
+	args = append([]string{"-C", goroot(), cmd}, args...)
 	c := exec.Command("git", args...)
 	c.Stderr = os.Stderr
 	output, err := c.Output()
@@ -196,7 +225,7 @@ func getHash() (string, []byte) {
 
 func doBuild() {
 	c := exec.Command("./make.bash")
-	c.Dir = filepath.Join(goroot, "src")
+	c.Dir = filepath.Join(goroot(), "src")
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
@@ -217,6 +246,7 @@ func doSave(hash string, diff []byte) {
 	}
 	osArch := goos + "_" + goarch
 
+	goroot := goroot()
 	for _, binTool := range binTools {
 		src := filepath.Join(goroot, "bin", binTool)
 		if _, err := os.Stat(src); err == nil {

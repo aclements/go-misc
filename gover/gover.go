@@ -58,8 +58,8 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  %s [flags] save [name] - save current build\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] name args... - run go <args> using build <name>\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] run name command... - run <command> using build <name>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] <name> <args>... - run go <args> using build <name>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] run <name> <command>... - run <command> using build <name>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] clean - clean the deduplication cache", os.Args[0])

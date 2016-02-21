@@ -88,15 +88,14 @@ func main() {
 		}
 
 		// Validate paths.
-		savePath := filepath.Join(*verDir, hash)
-		st, err := os.Stat(savePath)
-		hashExists := err == nil && st.IsDir()
+		savePath, hashExists := getSavePath(hash)
 
 		nameExists, nameRight := false, true
 		if name != "" {
 			st2, err := os.Stat(filepath.Join(*verDir, name))
 			nameExists = err == nil && st2.IsDir()
 			if nameExists {
+				st, _ := os.Stat(savePath)
 				nameRight = os.SameFile(st, st2)
 			}
 		}
@@ -170,6 +169,12 @@ func gitCmd(cmd string, args ...string) string {
 	return string(output)
 }
 
+func getSavePath(name string) (string, bool) {
+	savePath := filepath.Join(*verDir, name)
+	st, err := os.Stat(savePath)
+	return savePath, err == nil && st.IsDir()
+}
+
 func getHash() (string, []byte) {
 	rev := strings.TrimSpace(string(gitCmd("rev-parse", "--short", "HEAD")))
 
@@ -195,7 +200,7 @@ func doBuild() {
 
 func doSave(hash string, diff []byte) {
 	// Create a minimal GOROOT at $GOROOT/gover/hash.
-	savePath := filepath.Join(*verDir, hash)
+	savePath, _ := getSavePath(hash)
 	goos, goarch := runtime.GOOS, runtime.GOARCH
 	if x := os.Getenv("GOOS"); x != "" {
 		goos = x
@@ -231,7 +236,8 @@ func doSave(hash string, diff []byte) {
 
 func doLink(hash, name string) {
 	if name != "" && name != hash {
-		err := os.Symlink(hash, filepath.Join(*verDir, name))
+		savePath, _ := getSavePath(name)
+		err := os.Symlink(hash, savePath)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -337,7 +343,7 @@ func doList() {
 }
 
 func doRun(name string, cmd []string) {
-	savePath := filepath.Join(*verDir, name)
+	savePath, _ := getSavePath(name)
 
 	c := exec.Command(filepath.Join(savePath, "bin", cmd[0]), cmd[1:]...)
 	c.Env = append([]string(nil), os.Environ()...)

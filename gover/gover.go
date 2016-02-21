@@ -58,6 +58,7 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  %s [flags] save [name] - save current build\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] name args... - run go <args> using build <name>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] run name command... - run <command> using build <name>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
@@ -153,8 +154,14 @@ func main() {
 		doClean()
 
 	default:
-		flag.Usage()
-		os.Exit(2)
+		if flag.NArg() < 2 {
+			flag.Usage()
+			os.Exit(2)
+		}
+		if _, ok := getSavePath(flag.Arg(0)); !ok {
+			log.Fatalf("unknown name or subcommand `%s'", flag.Arg(0))
+		}
+		doRun(flag.Arg(0), append([]string{"go"}, flag.Args()[1:]...))
 	}
 }
 

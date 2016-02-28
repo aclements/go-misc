@@ -26,6 +26,7 @@ var run struct {
 	order      string
 	topLevel   string
 	benchFlags string
+	buildCmd   string
 	iterations int
 	goverSave  bool
 }
@@ -41,6 +42,7 @@ func init() {
 	f.StringVar(&run.order, "order", "seq", "run benchmarks in `order`, which must be one of: seq, spread")
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
 	f.StringVar(&run.benchFlags, "benchflags", "", "pass `flags` to benchmark")
+	f.StringVar(&run.buildCmd, "buildcmd", "go test -c", "build benchmark using \"`cmd` -o <bin>\"")
 	f.IntVar(&run.iterations, "n", 5, "run each benchmark `N` times")
 	f.StringVar(&outDir, "o", "", "write binaries and logs to `directory`")
 	f.BoolVar(&run.goverSave, "gover-save", false, "save toolchain builds with gover")
@@ -243,7 +245,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 		if commit.gover {
 			// TODO: It would be better if gover took a
 			// long hash and did the right thing.
-			buildCmd = []string{"gover", "run", commit.hash[:7], "go"}
+			buildCmd = []string{"gover", "run", commit.hash[:7]}
 		} else {
 			// If this is the Go toolchain, do a full
 			// make.bash. Otherwise, we assume that go
@@ -264,17 +266,18 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 				if run.goverSave && doGoverSave() == nil {
 					commit.gover = true
 				}
-				buildCmd = []string{filepath.Join(run.topLevel, "bin", "go")}
-			} else {
-				// Assume go is in $PATH.
-				buildCmd = []string{"go"}
 			}
+			// Assume build command is in $PATH.
+			//
+			// TODO: Force PATH if we built the toolchain.
+			buildCmd = []string{}
 		}
 
 		if isXBenchmark {
-			buildCmd = append(buildCmd, "build", "-o", commit.binPath)
+			buildCmd = append(buildCmd, "go", "build", "-o", commit.binPath)
 		} else {
-			buildCmd = append(buildCmd, "test", "-c", "-o", commit.binPath)
+			buildCmd = append(buildCmd, strings.Fields(run.buildCmd)...)
+			buildCmd = append(buildCmd, "-o", commit.binPath)
 		}
 		cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
 		if dryRun {

@@ -226,7 +226,7 @@ func pickCommitSpread(commits []*commitInfo) *commitInfo {
 // the commit log to record the outcome.
 func runBenchmark(commit *commitInfo, status *StatusReporter) {
 	isXBenchmark := false
-	if abs, _ := os.Getwd(); strings.Contains(abs, "golang.org/x/benchmarks/") {
+	if abs, _ := os.Getwd(); strings.HasSuffix(abs, "golang.org/x/benchmarks/bench") {
 		isXBenchmark = true
 	}
 

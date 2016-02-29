@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -21,6 +22,10 @@ import (
 // TODO: Support running pre-built binaries without specific hashes.
 // This is useful for testing things that aren't yet committed or that
 // require unusual build steps.
+
+// TODO: If we switched to the extended benchmark format and writing
+// out one big file, we could count runs using the configuration
+// blocks instead of the silly "PASS" search we use now.
 
 var run struct {
 	order      string
@@ -311,6 +316,15 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		commit.count++
+		if c, f, _ := countRuns(bytes.NewBuffer(out)); c+f == 0 {
+			// This log doesn't count as a run, probably
+			// because it's missing a "PASS". Add one so
+			// we can read this back in properly later.
+			if !bytes.HasSuffix(out, []byte{'\n'}) {
+				out = append(out, '\n')
+			}
+			out = append(out, []byte("PASS\n")...)
+		}
 	} else {
 		fmt.Fprintf(os.Stderr, "failed to run benchmark at %s:\n%s", commit.hash, out)
 		commit.fails++

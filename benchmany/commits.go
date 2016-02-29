@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -53,7 +54,17 @@ func getCommits(revRange []string) []*commitInfo {
 	var commits []*commitInfo
 	for i, hash := range hashes {
 		logPath := filepath.Join(outDir, fmt.Sprintf("log.%s", hash[:7]))
-		count, fails, buildFailed := countRuns(logPath)
+		logf, err := os.Open(logPath)
+		var count, fails int
+		var buildFailed bool
+		if err != nil {
+			if !os.IsNotExist(err) {
+				log.Fatal(err)
+			}
+		} else {
+			count, fails, buildFailed = countRuns(logf)
+			logf.Close()
+		}
 		commitDate, err := time.Parse(time.RFC3339, dates[i])
 		if err != nil {
 			log.Fatalf("cannot parse commit date: %v", err)
@@ -76,40 +87,22 @@ func getCommits(revRange []string) []*commitInfo {
 	return commits
 }
 
-// countRuns parses the log at path and returns the number of
-// successful runs, the number of failed runs, and whether the build
-// failed.
-func countRuns(path string) (count, fails int, buildFailed bool) {
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return
-	} else if err != nil {
-		log.Fatal(err)
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	inXMetrics := false
+// countRuns parses a log and returns the number of successful runs,
+// the number of failed runs, and whether the build failed.
+func countRuns(r io.Reader) (count, fails int, buildFailed bool) {
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		t := scanner.Text()
-		if t == "PASS" {
+		if t == "PASS" || t == "FAIL" {
 			count++
 		} else if t == "FAILED:" {
 			fails++
 		} else if t == "BUILD FAILED:" {
 			buildFailed = true
 		}
-		if strings.HasPrefix(t, "GOPERF-METRIC:") {
-			if !inXMetrics {
-				count++
-			}
-			inXMetrics = true
-		} else {
-			inXMetrics = false
-		}
 	}
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "reading log %s: %v", path, err)
+		fmt.Fprintf(os.Stderr, "reading log: %v", err)
 		os.Exit(1)
 	}
 	return

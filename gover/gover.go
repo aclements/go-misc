@@ -81,6 +81,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  %s [flags] save [name] - save current build\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] <name> <args>... - run go <args> using build <name>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] run <name> <command>... - run <command> using PATH and GOROOT for build <name>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] env <name> - print the environment for build <name> as shell code\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] clean - clean the deduplication cache", os.Args[0])
@@ -174,6 +175,13 @@ func main() {
 			os.Exit(2)
 		}
 		doRun(flag.Arg(1), flag.Args()[2:])
+
+	case "env":
+		if flag.NArg() != 2 {
+			flag.Usage()
+			os.Exit(2)
+		}
+		doEnv(flag.Arg(1))
 
 	case "clean":
 		if flag.NArg() > 1 {
@@ -401,17 +409,8 @@ func doRun(name string, cmd []string) {
 		}
 		c.Env = append(c.Env, env)
 	}
-	c.Env = append(c.Env, "GOROOT="+savePath)
-
-	path := []string{filepath.Join(savePath, "bin")}
-	// Strip existing Go tree from PATH.
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if isGoroot(filepath.Join(dir, "..")) {
-			continue
-		}
-		path = append(path, dir)
-	}
-	c.Env = append(c.Env, "PATH="+strings.Join(path, string(filepath.ListSeparator)))
+	goroot, path := getEnv(savePath)
+	c.Env = append(c.Env, "GOROOT="+goroot, "PATH="+path)
 
 	// Run command.
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -419,6 +418,32 @@ func doRun(name string, cmd []string) {
 		fmt.Printf("command failed: %s\n", err)
 		os.Exit(1)
 	}
+}
+
+func doEnv(name string) {
+	savePath, ok := getSavePath(name)
+	if !ok {
+		log.Fatalf("unknown name `%s'", name)
+	}
+
+	goroot, path := getEnv(savePath)
+	fmt.Printf("PATH=%s;\n", shellEscape(path))
+	fmt.Printf("GOROOT=%s;\n", shellEscape(goroot))
+	fmt.Printf("export GOROOT;\n")
+}
+
+// getEnv returns the GOROOT and PATH for the Go tree rooted at savePath.
+func getEnv(savePath string) (goroot, path string) {
+	p := []string{filepath.Join(savePath, "bin")}
+	// Strip existing Go tree from PATH.
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if isGoroot(filepath.Join(dir, "..")) {
+			continue
+		}
+		p = append(p, dir)
+	}
+
+	return savePath, strings.Join(p, string(filepath.ListSeparator))
 }
 
 var goodDedupPath = regexp.MustCompile("/[0-9a-f]{2}/[0-9a-f]{38}$")

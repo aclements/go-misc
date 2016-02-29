@@ -409,21 +409,19 @@ func doGC() {
 		if info.IsDir() {
 			return nil
 		}
-		if st, err := os.Stat(path); err == nil {
-			st, ok := st.Sys().(*syscall.Stat_t)
-			if !ok || st.Nlink != 1 {
-				return nil
-			}
-			if !goodDedupPath.MatchString(path) {
-				// Be paranoid about removing files.
-				log.Printf("unexpected file in dedup cache: %s\n", path)
-				return nil
-			}
-			if err := os.Remove(path); err != nil {
-				log.Printf("failed to remove %s: %v", path, err)
-			} else {
-				removed++
-			}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || st.Nlink != 1 {
+			return nil
+		}
+		if !goodDedupPath.MatchString(path) {
+			// Be paranoid about removing files.
+			log.Printf("unexpected file in dedup cache: %s\n", path)
+			return nil
+		}
+		if err := os.Remove(path); err != nil {
+			log.Printf("failed to remove %s: %v", path, err)
+		} else {
+			removed++
 		}
 		return nil
 	})

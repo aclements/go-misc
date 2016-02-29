@@ -100,7 +100,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] gc - clean the deduplication cache", os.Args[0])
-		fmt.Fprintf(os.Stderr, "\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "\n\n")
+		fmt.Fprintf(os.Stderr, "<name> may be an unambiguous commit hash or a string name.\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
 
@@ -134,15 +136,15 @@ func main() {
 		}
 
 		// Validate paths.
-		savePath, hashExists := getSavePath(hash)
+		savePath, hashExists := resolveName(hash)
 
-		nameExists, nameRight := false, true
-		if name != "" {
-			st2, err := os.Stat(filepath.Join(*verDir, name))
-			nameExists = err == nil && st2.IsDir()
+		namePath, nameExists, nameRight := "", false, true
+		if name != "" && name != hash {
+			namePath, nameExists = resolveName(name)
 			if nameExists {
-				st, _ := os.Stat(savePath)
-				nameRight = os.SameFile(st, st2)
+				st1, _ := os.Stat(savePath)
+				st2, _ := os.Stat(namePath)
+				nameRight = os.SameFile(st1, st2)
 			}
 		}
 
@@ -152,8 +154,8 @@ func main() {
 					log.Fatalf("name `%s' exists and refers to another build", name)
 				}
 				msg := fmt.Sprintf("saved build `%s' already exists", hash)
-				if !nameExists {
-					doLink(hash, name)
+				if namePath != "" && !nameExists {
+					doLink(hash, namePath)
 					msg += fmt.Sprintf("; added name `%s'", name)
 				}
 				fmt.Fprintln(os.Stderr, msg)
@@ -170,7 +172,9 @@ func main() {
 			}
 		}
 		doSave(hash, diff)
-		doLink(hash, name)
+		if namePath != "" {
+			doLink(hash, namePath)
+		}
 		if name == "" {
 			fmt.Fprintf(os.Stderr, "saved build as `%s'\n", hash)
 		} else {
@@ -210,7 +214,7 @@ func main() {
 			flag.Usage()
 			os.Exit(2)
 		}
-		if _, ok := getSavePath(flag.Arg(0)); !ok {
+		if _, ok := resolveName(flag.Arg(0)); !ok {
 			log.Fatalf("unknown name or subcommand `%s'", flag.Arg(0))
 		}
 		doRun(flag.Arg(0), append([]string{"go"}, flag.Args()[1:]...))
@@ -235,14 +239,8 @@ func gitCmd(cmd string, args ...string) string {
 	return string(output)
 }
 
-func getSavePath(name string) (string, bool) {
-	savePath := filepath.Join(*verDir, name)
-	st, err := os.Stat(savePath)
-	return savePath, err == nil && st.IsDir()
-}
-
 func getHash() (string, []byte) {
-	rev := strings.TrimSpace(string(gitCmd("rev-parse", "--short", "HEAD")))
+	rev := strings.TrimSpace(string(gitCmd("rev-parse", "HEAD")))
 
 	diff := []byte(gitCmd("diff", "HEAD"))
 
@@ -266,7 +264,7 @@ func doBuild() {
 
 func doSave(hash string, diff []byte) {
 	// Create a minimal GOROOT at $GOROOT/gover/hash.
-	savePath, _ := getSavePath(hash)
+	savePath, _ := resolveName(hash)
 	goos, goarch := runtime.GOOS, runtime.GOARCH
 	if x := os.Getenv("GOOS"); x != "" {
 		goos = x
@@ -301,13 +299,10 @@ func doSave(hash string, diff []byte) {
 	}
 }
 
-func doLink(hash, name string) {
-	if name != "" && name != hash {
-		savePath, _ := getSavePath(name)
-		err := os.Symlink(hash, savePath)
-		if err != nil {
-			log.Fatal(err)
-		}
+func doLink(hash, namePath string) {
+	err := os.Symlink(hash, namePath)
+	if err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -441,7 +436,7 @@ func doRun(name string, cmd []string) {
 }
 
 func doEnv(name string) {
-	savePath, ok := getSavePath(name)
+	savePath, ok := resolveName(name)
 	if !ok {
 		log.Fatalf("unknown name `%s'", name)
 	}

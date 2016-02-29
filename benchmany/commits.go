@@ -47,7 +47,7 @@ func getCommits(revRange []string) []*commitInfo {
 	x, _ := exec.Command("gover", "list").CombinedOutput()
 	for _, cached := range lines(string(x)) {
 		fs := strings.SplitN(cached, " ", 2)
-		cachedHashes[fs[0]] = true
+		cachedHashes[fs[0][:7]] = true
 	}
 
 	// Load current benchmark state.

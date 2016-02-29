@@ -99,7 +99,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  %s [flags] env <name> - print the environment for build <name> as shell code\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] clean - clean the deduplication cache", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] gc - clean the deduplication cache", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nFlags:\n")
 		flag.PrintDefaults()
 	}
@@ -198,12 +198,12 @@ func main() {
 		}
 		doEnv(flag.Arg(1))
 
-	case "clean":
+	case "gc":
 		if flag.NArg() > 1 {
 			flag.Usage()
 			os.Exit(2)
 		}
-		doClean()
+		doGC()
 
 	default:
 		if flag.NArg() < 2 {
@@ -463,7 +463,7 @@ func getEnv(savePath string) (goroot, path string) {
 
 var goodDedupPath = regexp.MustCompile("/[0-9a-f]{2}/[0-9a-f]{38}$")
 
-func doClean() {
+func doGC() {
 	removed := 0
 	filepath.Walk(filepath.Join(*verDir, "_dedup"), func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {

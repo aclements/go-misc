@@ -327,7 +327,7 @@ func doList() {
 	sort.Sort(buildInfoSorter(builds))
 
 	for _, info := range builds {
-		fmt.Print(info.fullName())
+		fmt.Print(info.shortName())
 		if !info.commit.authorDate.IsZero() {
 			fmt.Printf(" %s", info.commit.authorDate.Local().Format("2006-01-02T15:04:05"))
 		}

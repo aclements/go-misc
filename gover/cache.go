@@ -74,6 +74,14 @@ func (i buildInfo) fullName() string {
 	return i.commitHash + "+" + i.deltaHash
 }
 
+func (i buildInfo) shortName() string {
+	// TODO: Print more than 7 characters if necessary.
+	if i.deltaHash == "" {
+		return i.commitHash[:7]
+	}
+	return i.commitHash[:7] + "+" + i.deltaHash
+}
+
 type listFlags int
 
 const (

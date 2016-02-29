@@ -2,6 +2,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Command gover manages saved versions of the Go tree.
+//
+// gover saves builds of the Go source tree and runs commands using
+// saved Go versions. For example,
+//
+//     cd $GOROOT
+//     git checkout go1.5.1
+//     gover build 1.5.1
+//
+// will checkout Go 1.5.1, build the source tree, and save it under
+// the name "1.5.1", as well as its commit hash (f2e4c8b). You can
+// then later run commands with Go 1.5.1. For example, the following
+// will run "go install" using Go 1.5.1:
+//
+//     gover 1.5.1 install
 package main
 
 import (

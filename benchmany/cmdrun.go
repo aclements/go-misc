@@ -34,6 +34,11 @@ var run struct {
 var cmdRunFlags = flag.NewFlagSet(os.Args[0]+" run", flag.ExitOnError)
 
 func init() {
+	isXBenchmark := false
+	if abs, _ := os.Getwd(); strings.HasSuffix(abs, "golang.org/x/benchmarks/bench") {
+		isXBenchmark = true
+	}
+
 	f := cmdRunFlags
 	f.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s run [flags] <revision range>\n", os.Args[0])
@@ -41,8 +46,16 @@ func init() {
 	}
 	f.StringVar(&run.order, "order", "seq", "run benchmarks in `order`, which must be one of: seq, spread")
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
-	f.StringVar(&run.benchFlags, "benchflags", "", "pass `flags` to benchmark")
-	f.StringVar(&run.buildCmd, "buildcmd", "go test -c", "build benchmark using \"`cmd` -o <bin>\"")
+	defaultBenchFlags := "-test.run NONE -test.bench ."
+	if isXBenchmark {
+		defaultBenchFlags = ""
+	}
+	f.StringVar(&run.benchFlags, "benchflags", defaultBenchFlags, "pass `flags` to benchmark")
+	defaultBuildCmd := "go test -c"
+	if isXBenchmark {
+		defaultBuildCmd = "go build"
+	}
+	f.StringVar(&run.buildCmd, "buildcmd", defaultBuildCmd, "build benchmark using \"`cmd` -o <bin>\"")
 	f.IntVar(&run.iterations, "n", 5, "run each benchmark `N` times")
 	f.StringVar(&outDir, "o", "", "write binaries and logs to `directory`")
 	f.BoolVar(&run.goverSave, "gover-save", false, "save toolchain builds with gover")
@@ -227,11 +240,6 @@ func pickCommitSpread(commits []*commitInfo) *commitInfo {
 // commit.fails, and commit.buildFailed as appropriate and writes to
 // the commit log to record the outcome.
 func runBenchmark(commit *commitInfo, status *StatusReporter) {
-	isXBenchmark := false
-	if abs, _ := os.Getwd(); strings.HasSuffix(abs, "golang.org/x/benchmarks/bench") {
-		isXBenchmark = true
-	}
-
 	// Build the benchmark if necessary.
 	if !exists(commit.binPath) {
 		runStatus(status, commit, "building")
@@ -273,12 +281,8 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 			buildCmd = []string{}
 		}
 
-		if isXBenchmark {
-			buildCmd = append(buildCmd, "go", "build", "-o", commit.binPath)
-		} else {
-			buildCmd = append(buildCmd, strings.Fields(run.buildCmd)...)
-			buildCmd = append(buildCmd, "-o", commit.binPath)
-		}
+		buildCmd = append(buildCmd, strings.Fields(run.buildCmd)...)
+		buildCmd = append(buildCmd, "-o", commit.binPath)
 		cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
 		if dryRun {
 			dryPrint(cmd)
@@ -293,19 +297,12 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 
 	// Run the benchmark.
 	runStatus(status, commit, "running")
-	var args []string
-	if isXBenchmark {
-		args = []string{}
-	} else {
-		args = []string{"-test.run", "NONE", "-test.bench", "."}
-	}
-	args = append(args, strings.Fields(run.benchFlags)...)
 	name := commit.binPath
 	if filepath.Base(name) == name {
 		// Make exec.Command treat this as a relative path.
 		name = "./" + name
 	}
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, strings.Fields(run.benchFlags)...)
 	if dryRun {
 		dryPrint(cmd)
 		commit.count++

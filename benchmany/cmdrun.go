@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // TODO: Check CPU performance governor before each benchmark.
@@ -34,6 +35,7 @@ var run struct {
 	buildCmd   string
 	iterations int
 	saveTree   bool
+	timeout    time.Duration
 }
 
 var cmdRunFlags = flag.NewFlagSet(os.Args[0]+" run", flag.ExitOnError)
@@ -64,6 +66,7 @@ func init() {
 	f.IntVar(&run.iterations, "n", 5, "run each benchmark `N` times")
 	f.StringVar(&outDir, "o", "", "write binaries and logs to `directory`")
 	f.BoolVar(&run.saveTree, "save-tree", false, "save Go trees using gover and run benchmarks under saved trees")
+	f.DurationVar(&run.timeout, "timeout", 30*time.Minute, "time out a run after `duration`")
 	f.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
 	registerSubcommand("run", "[flags] <revision range> - run benchmarks", cmdRun, f)
 }
@@ -269,7 +272,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 				cmd.Dir = filepath.Join(run.topLevel, "src")
 				if dryRun {
 					dryPrint(cmd)
-				} else if out, err := cmd.CombinedOutput(); err != nil {
+				} else if out, err := combinedOutputTimeout(cmd); err != nil {
 					detail := indent(string(out)) + indent(err.Error())
 					fmt.Fprintf(os.Stderr, "failed to build toolchain at %s:\n%s", commit.hash, detail)
 					commit.buildFailed = true
@@ -291,7 +294,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 		cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
 		if dryRun {
 			dryPrint(cmd)
-		} else if out, err := cmd.CombinedOutput(); err != nil {
+		} else if out, err := combinedOutputTimeout(cmd); err != nil {
 			detail := indent(string(out)) + indent(err.Error())
 			fmt.Fprintf(os.Stderr, "failed to build tests at %s:\n%s", commit.hash, detail)
 			commit.buildFailed = true
@@ -317,7 +320,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 		commit.count++
 		return
 	}
-	out, err := cmd.CombinedOutput()
+	out, err := combinedOutputTimeout(cmd)
 	if err == nil {
 		commit.count++
 		if c, f, _ := countRuns(bytes.NewBuffer(out)); c+f == 0 {
@@ -359,4 +362,46 @@ func doGoverSave() error {
 // runStatus updates the status message for commit.
 func runStatus(sr *StatusReporter, commit *commitInfo, status string) {
 	sr.Message(fmt.Sprintf("commit %s, iteration %d/%d: %s...", commit.hash[:7], commit.count+1, run.iterations, status))
+}
+
+// combinedOutputTimeout is like c.CombinedOutput(), but if
+// run.timeout != 0, it will kill c after run.timeout time expires.
+func combinedOutputTimeout(c *exec.Cmd) (out []byte, err error) {
+	var b bytes.Buffer
+	c.Stdout = &b
+	c.Stderr = &b
+	if err := c.Start(); err != nil {
+		return nil, err
+	}
+
+	if run.timeout == 0 {
+		err := c.Wait()
+		return b.Bytes(), err
+	}
+
+	tick := time.NewTimer(run.timeout)
+	trace := signalTrace
+	done := make(chan error)
+	go func() {
+		done <- c.Wait()
+	}()
+loop:
+	for {
+		select {
+		case err = <-done:
+			break loop
+		case <-tick.C:
+			if trace != nil {
+				fmt.Fprintf(os.Stderr, "command timed out; sending %v\n", trace)
+				c.Process.Signal(trace)
+				tick = time.NewTimer(5 * time.Second)
+				trace = nil
+			} else {
+				fmt.Fprintf(os.Stderr, "command timed out; killing\n")
+				c.Process.Kill()
+			}
+		}
+	}
+	tick.Stop()
+	return b.Bytes(), err
 }

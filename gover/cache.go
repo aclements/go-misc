@@ -10,11 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var minHashRe = regexp.MustCompile("^[0-9a-f]{7,40}$")
 var fullHashRe = regexp.MustCompile("^[0-9a-f]{40}$")
+var hashPlusRe = regexp.MustCompile(`^[0-9a-f]{40}(\+[0-9a-f]{10})?$`)
 
 // resolveName returns the path to the root of the named build and
 // whether or not that path exists. It will log an error and exit if
@@ -38,6 +41,7 @@ func resolveName(name string) (path string, ok bool) {
 		}
 		var fullName string
 		for _, f := range files {
+			// TODO: Match plus part, too?
 			if !f.IsDir() || !fullHashRe.MatchString(f.Name()) {
 				continue
 			}
@@ -54,4 +58,109 @@ func resolveName(name string) (path string, ok bool) {
 	}
 
 	return savePath, false
+}
+
+type buildInfo struct {
+	commitHash string
+	deltaHash  string
+	names      []string
+	commit     *commit
+}
+
+func (i buildInfo) fullName() string {
+	if i.deltaHash == "" {
+		return i.commitHash
+	}
+	return i.commitHash + "+" + i.deltaHash
+}
+
+type listFlags int
+
+const (
+	listNames listFlags = 1 << iota
+	listCommit
+)
+
+func listBuilds(flags listFlags) ([]*buildInfo, error) {
+	files, err := ioutil.ReadDir(*verDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	// Collect the saved builds.
+	builds := []*buildInfo{}
+	var baseMap map[string]*buildInfo
+	if flags&listNames != 0 {
+		baseMap = make(map[string]*buildInfo)
+	}
+	for _, file := range files {
+		if !file.IsDir() || !hashPlusRe.MatchString(file.Name()) {
+			continue
+		}
+		nameParts := strings.SplitN(file.Name(), "+", 2)
+		info := &buildInfo{commitHash: nameParts[0]}
+		if len(nameParts) > 1 {
+			info.deltaHash = nameParts[1]
+		}
+
+		builds = append(builds, info)
+		if baseMap != nil {
+			baseMap[file.Name()] = info
+		}
+
+		if flags&listCommit != 0 {
+			commit, err := ioutil.ReadFile(filepath.Join(*verDir, file.Name(), "commit"))
+			if err != nil {
+				if !os.IsNotExist(err) {
+					log.Fatal(err)
+				}
+			} else {
+				info.commit = parseCommit(commit)
+			}
+		}
+	}
+
+	// Collect the names for each build.
+	if flags&listNames != 0 {
+		for _, file := range files {
+			if file.Mode()&os.ModeType == os.ModeSymlink {
+				base, err := os.Readlink(filepath.Join(*verDir, file.Name()))
+				if err != nil {
+					continue
+				}
+				if info, ok := baseMap[base]; ok {
+					info.names = append(info.names, file.Name())
+				}
+			}
+		}
+	}
+
+	return builds, nil
+}
+
+type commit struct {
+	authorDate time.Time
+	topLine    string
+}
+
+func parseCommit(obj []byte) *commit {
+	out := &commit{}
+	lines := strings.Split(string(obj), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "author ") {
+			fs := strings.Fields(line)
+			secs, err := strconv.ParseInt(fs[len(fs)-2], 10, 64)
+			if err != nil {
+				log.Fatalf("malformed author in commit: %s", err)
+			}
+			out.authorDate = time.Unix(secs, 0)
+		}
+		if len(line) == 0 {
+			out.topLine = lines[i+1]
+			break
+		}
+	}
+	return out
 }

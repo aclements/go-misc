@@ -33,10 +33,8 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
-	"time"
 )
 
 var (
@@ -306,91 +304,30 @@ func doLink(hash, namePath string) {
 	}
 }
 
-type commit struct {
-	authorDate time.Time
-	topLine    string
-}
+type buildInfoSorter []*buildInfo
 
-func parseCommit(obj []byte) commit {
-	out := commit{}
-	lines := strings.Split(string(obj), "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(line, "author ") {
-			fs := strings.Fields(line)
-			secs, err := strconv.ParseInt(fs[len(fs)-2], 10, 64)
-			if err != nil {
-				log.Fatalf("malformed author in commit: %s", err)
-			}
-			out.authorDate = time.Unix(secs, 0)
-		}
-		if len(line) == 0 {
-			out.topLine = lines[i+1]
-			break
-		}
-	}
-	return out
-}
-
-type saveInfo struct {
-	base   string
-	names  []string
-	commit commit
-}
-
-type saveInfoSorter []*saveInfo
-
-func (s saveInfoSorter) Len() int {
+func (s buildInfoSorter) Len() int {
 	return len(s)
 }
 
-func (s saveInfoSorter) Less(i, j int) bool {
+func (s buildInfoSorter) Less(i, j int) bool {
 	return s[i].commit.authorDate.Before(s[j].commit.authorDate)
 }
 
-func (s saveInfoSorter) Swap(i, j int) {
+func (s buildInfoSorter) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]
 }
 
 func doList() {
-	files, err := ioutil.ReadDir(*verDir)
-	if os.IsNotExist(err) {
-		return
-	} else if err != nil {
+	builds, err := listBuilds(listNames | listCommit)
+	if err != nil {
 		log.Fatal(err)
 	}
 
-	baseMap := make(map[string]*saveInfo)
-	bases := []*saveInfo{}
-	for _, file := range files {
-		if !file.IsDir() || file.Name() == "_dedup" {
-			continue
-		}
-		info := &saveInfo{base: file.Name(), names: []string{}}
-		baseMap[file.Name()] = info
-		bases = append(bases, info)
+	sort.Sort(buildInfoSorter(builds))
 
-		commit, err := ioutil.ReadFile(filepath.Join(*verDir, file.Name(), "commit"))
-		if os.IsNotExist(err) {
-			continue
-		}
-		info.commit = parseCommit(commit)
-	}
-	for _, file := range files {
-		if file.Mode()&os.ModeType == os.ModeSymlink {
-			base, err := os.Readlink(filepath.Join(*verDir, file.Name()))
-			if err != nil {
-				continue
-			}
-			if info, ok := baseMap[base]; ok {
-				info.names = append(info.names, file.Name())
-			}
-		}
-	}
-
-	sort.Sort(saveInfoSorter(bases))
-
-	for _, info := range bases {
-		fmt.Print(info.base)
+	for _, info := range builds {
+		fmt.Print(info.fullName())
 		if !info.commit.authorDate.IsZero() {
 			fmt.Printf(" %s", info.commit.authorDate.Local().Format("2006-01-02T15:04:05"))
 		}

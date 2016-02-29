@@ -410,22 +410,27 @@ func doList() {
 }
 
 func doRun(name string, cmd []string) {
-	savePath, ok := getSavePath(name)
+	savePath, ok := resolveName(name)
 	if !ok {
 		log.Fatalf("unknown name `%s'", name)
 	}
+	goroot, path := getEnv(savePath)
 
+	// exec.Command looks up the command in this process' PATH.
+	// Unfortunately, this is a rather complex process and there's
+	// no way to provide a different PATH, so set the process'
+	// PATH.
+	os.Setenv("PATH", path)
 	c := exec.Command(cmd[0], cmd[1:]...)
 
-	// Build the command environment.
+	// Build the rest of the command environment.
 	for _, env := range os.Environ() {
-		if strings.HasPrefix(env, "GOROOT=") || strings.HasPrefix(env, "PATH=") {
+		if strings.HasPrefix(env, "GOROOT=") {
 			continue
 		}
 		c.Env = append(c.Env, env)
 	}
-	goroot, path := getEnv(savePath)
-	c.Env = append(c.Env, "GOROOT="+goroot, "PATH="+path)
+	c.Env = append(c.Env, "GOROOT="+goroot)
 
 	// Run command.
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr

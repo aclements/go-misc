@@ -325,7 +325,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 
 func doGoverSave() error {
 	cmd := exec.Command("gover", "save")
-	cmd.Env = append([]string{"GOROOT=" + run.topLevel}, os.Environ()...)
+	cmd.Dir = run.topLevel
 	if dryRun {
 		dryPrint(cmd)
 		return nil

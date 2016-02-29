@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var minHashRe = regexp.MustCompile("^[0-9a-f]{7,40}$")
+var hashNameRe = regexp.MustCompile(`^[0-9a-f]{7,40}(\+[0-9a-f]{1,10})?$`)
 var fullHashRe = regexp.MustCompile("^[0-9a-f]{40}$")
 var hashPlusRe = regexp.MustCompile(`^[0-9a-f]{40}(\+[0-9a-f]{10})?$`)
 
@@ -32,25 +32,30 @@ func resolveName(name string) (path string, ok bool) {
 	}
 
 	// Otherwise, try to resolve it as an unambiguous hash prefix.
-	if minHashRe.MatchString(name) {
-		files, err := ioutil.ReadDir(*verDir)
-		if os.IsNotExist(err) {
-			return savePath, false
-		} else if err != nil {
-			log.Fatalf("reading %s: %v", *verDir, err)
+	if hashNameRe.MatchString(name) {
+		nameParts := strings.SplitN(name, "+", 2)
+		builds, err := listBuilds(0)
+		if err != nil {
+			log.Fatal(err)
 		}
+
 		var fullName string
-		for _, f := range files {
-			// TODO: Match plus part, too?
-			if !f.IsDir() || !fullHashRe.MatchString(f.Name()) {
+		for _, b := range builds {
+			if !strings.HasPrefix(b.commitHash, nameParts[0]) {
 				continue
 			}
-			if strings.HasPrefix(f.Name(), name) {
-				if fullName != "" {
-					log.Fatalf("ambiguous name `%s`", name)
-				}
-				fullName = f.Name()
+			if (len(nameParts) == 1) != (b.deltaHash == "") {
+				continue
 			}
+			if len(nameParts) > 1 && !strings.HasPrefix(b.deltaHash, nameParts[1]) {
+				continue
+			}
+
+			// We found a match.
+			if fullName != "" {
+				log.Fatalf("ambiguous name `%s`", name)
+			}
+			fullName = b.fullName()
 		}
 		if fullName != "" {
 			return filepath.Join(*verDir, fullName), true

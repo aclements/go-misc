@@ -33,7 +33,7 @@ var run struct {
 	benchFlags string
 	buildCmd   string
 	iterations int
-	goverSave  bool
+	saveTree   bool
 }
 
 var cmdRunFlags = flag.NewFlagSet(os.Args[0]+" run", flag.ExitOnError)
@@ -63,7 +63,7 @@ func init() {
 	f.StringVar(&run.buildCmd, "buildcmd", defaultBuildCmd, "build benchmark using \"`cmd` -o <bin>\"")
 	f.IntVar(&run.iterations, "n", 5, "run each benchmark `N` times")
 	f.StringVar(&outDir, "o", "", "write binaries and logs to `directory`")
-	f.BoolVar(&run.goverSave, "gover-save", false, "save toolchain builds with gover")
+	f.BoolVar(&run.saveTree, "save-tree", false, "save Go trees using gover and run benchmarks under saved trees")
 	f.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
 	registerSubcommand("run", "[flags] <revision range> - run benchmarks", cmdRun, f)
 }
@@ -276,7 +276,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 					commit.writeLog([]byte("BUILD FAILED:\n" + detail))
 					return
 				}
-				if run.goverSave && doGoverSave() == nil {
+				if run.saveTree && doGoverSave() == nil {
 					commit.gover = true
 				}
 			}
@@ -307,7 +307,11 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 		// Make exec.Command treat this as a relative path.
 		name = "./" + name
 	}
-	cmd := exec.Command(name, strings.Fields(run.benchFlags)...)
+	args := append([]string{name}, strings.Fields(run.benchFlags)...)
+	if run.saveTree {
+		args = append([]string{"gover", "run", commit.hash[:7]}, args...)
+	}
+	cmd := exec.Command(args[0], args[1:]...)
 	if dryRun {
 		dryPrint(cmd)
 		commit.count++

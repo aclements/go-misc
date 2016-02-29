@@ -37,6 +37,9 @@ import (
 	"syscall"
 )
 
+// TODO: Consider also accepting a path for name, which could let this
+// replace rego.
+
 var (
 	verbose    = flag.Bool("v", false, "print commands being run")
 	verDir     = flag.String("dir", defaultVerDir(), "`directory` of saved Go roots")

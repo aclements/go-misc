@@ -60,10 +60,17 @@ func defaultGoroot() string {
 		// saying "the current directory".
 		goroot = "."
 	}
-	if st, err := os.Stat(filepath.Join(goroot, "src", "cmd", "go")); err != nil || !st.IsDir() {
+	if !isGoroot(goroot) {
 		return ""
 	}
 	return goroot
+}
+
+// isGoroot returns true if path is the root of a Go tree. It is
+// somewhat heuristic.
+func isGoroot(path string) bool {
+	st, err := os.Stat(filepath.Join(path, "src", "cmd", "go"))
+	return err == nil && st.IsDir()
 }
 
 func main() {
@@ -73,7 +80,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  %s [flags] save [name] - save current build\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] <name> <args>... - run go <args> using build <name>\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] run <name> <command>... - run <command> using build <name>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] run <name> <command>... - run <command> using PATH and GOROOT for build <name>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] clean - clean the deduplication cache", os.Args[0])
@@ -385,10 +392,28 @@ func doRun(name string, cmd []string) {
 		log.Fatalf("unknown name `%s'", name)
 	}
 
-	c := exec.Command(filepath.Join(savePath, "bin", cmd[0]), cmd[1:]...)
-	c.Env = append([]string(nil), os.Environ()...)
+	c := exec.Command(cmd[0], cmd[1:]...)
+
+	// Build the command environment.
+	for _, env := range os.Environ() {
+		if strings.HasPrefix(env, "GOROOT=") || strings.HasPrefix(env, "PATH=") {
+			continue
+		}
+		c.Env = append(c.Env, env)
+	}
 	c.Env = append(c.Env, "GOROOT="+savePath)
 
+	path := []string{filepath.Join(savePath, "bin")}
+	// Strip existing Go tree from PATH.
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if isGoroot(filepath.Join(dir, "..")) {
+			continue
+		}
+		path = append(path, dir)
+	}
+	c.Env = append(c.Env, "PATH="+strings.Join(path, string(filepath.ListSeparator)))
+
+	// Run command.
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
 		fmt.Printf("command failed: %s\n", err)

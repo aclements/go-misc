@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -17,8 +18,6 @@ import (
 )
 
 // TODO: Check CPU performance governor before each benchmark.
-
-// TODO: Mode to prioritize commits around big performance changes.
 
 // TODO: Support running pre-built binaries without specific hashes.
 // This is useful for testing things that aren't yet committed or that
@@ -30,6 +29,7 @@ import (
 
 var run struct {
 	order      string
+	metric     string
 	topLevel   string
 	benchFlags string
 	buildCmd   string
@@ -51,7 +51,8 @@ func init() {
 		fmt.Fprintf(os.Stderr, "Usage: %s run [flags] <revision range>\n", os.Args[0])
 		f.PrintDefaults()
 	}
-	f.StringVar(&run.order, "order", "seq", "run benchmarks in `order`, which must be one of: seq, spread")
+	f.StringVar(&run.order, "order", "seq", "run benchmarks in `order`, which must be one of: seq, spread, metric")
+	f.StringVar(&run.metric, "metric", "ns/op", "for -order metric, the benchmark metric to find differences in")
 	f.StringVar(&gitDir, "C", "", "run git in `dir`")
 	defaultBenchFlags := "-test.run NONE -test.bench ."
 	if isXBenchmark {
@@ -83,6 +84,8 @@ func cmdRun() {
 		pickCommit = pickCommitSeq
 	case "spread":
 		pickCommit = pickCommitSpread
+	case "metric":
+		pickCommit = pickCommitMetric
 	default:
 		fmt.Fprintf(os.Stderr, "unknown order: %s\n", run.order)
 		cmdRunFlags.Usage()
@@ -242,6 +245,64 @@ func pickCommitSpread(commits []*commitInfo) *commitInfo {
 		}
 	}
 	panic("unreachable")
+}
+
+func pickCommitMetric(commits []*commitInfo) *commitInfo {
+	// If there are any partial commits, finish them up.
+	for _, c := range commits {
+		if c.partial() {
+			return c
+		}
+	}
+
+	// Make sure we've run the most recent commit.
+	for _, c := range commits {
+		if c.runnable() {
+			return c
+		}
+		if !c.failed() {
+			break
+		}
+	}
+
+	// Make sure we've run the earliest commit.
+	for i := len(commits) - 1; i >= 0; i-- {
+		c := commits[i]
+		if c.runnable() {
+			return c
+		}
+		if !c.failed() {
+			break
+		}
+	}
+
+	// We're bounded from both sides and every commit we've run
+	// has the best stats we're going to get. Find the pair with
+	// the biggest difference in the metric.
+	prevI := -1
+	maxDiff, maxMid := -1.0, (*commitInfo)(nil)
+	for i, c := range commits {
+		if c.failed() || c.count == 0 {
+			continue
+		}
+		if prevI == -1 {
+			prevI = i
+			continue
+		}
+
+		if i > prevI+1 {
+			// TODO: This isn't branch-aware. We should
+			// only compare commits with an ancestry
+			// relationship.
+			diff := math.Abs(c.getMetric(run.metric) - commits[prevI].getMetric(run.metric))
+			if diff > maxDiff {
+				maxDiff = diff
+				maxMid = commits[(prevI+i)/2]
+			}
+		}
+		prevI = i
+	}
+	return maxMid
 }
 
 // runBenchmark runs the benchmark at commit. It updates commit.count,

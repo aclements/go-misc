@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aclements/go-moremath/stats"
 )
 
 // outDir is the directory containing benchmark binaries and logs.
@@ -27,6 +29,9 @@ type commitInfo struct {
 	logPath      string
 	count, fails int
 	buildFailed  bool
+
+	hasMetric   string
+	metricValue float64
 }
 
 // getCommits returns the commit info for all of the revisions in the
@@ -108,6 +113,12 @@ func countRuns(r io.Reader) (count, fails int, buildFailed bool) {
 	return
 }
 
+// failed returns whether commit c has failed and should not be run
+// any more.
+func (c *commitInfo) failed() bool {
+	return c.buildFailed || c.fails >= maxFails
+}
+
 // runnable returns whether commit c needs to be benchmarked at least
 // one more time.
 func (c *commitInfo) runnable() bool {
@@ -132,4 +143,21 @@ func (c *commitInfo) writeLog(msg []byte) {
 	if err := logFile.Close(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func (c *commitInfo) getMetric(metric string) float64 {
+	if c.hasMetric == metric {
+		return c.metricValue
+	}
+	col := readFiles(c.logPath)
+	col = col.Filter(BenchKey{Unit: metric})
+	allMeans := []float64{}
+	for _, stat := range col.Stats {
+		// TODO: Use trimmed mean?
+		stat.ComputeStats()
+		allMeans = append(allMeans, stat.Mean)
+	}
+	c.metricValue = stats.GeoMean(allMeans)
+	c.hasMetric = metric
+	return c.metricValue
 }

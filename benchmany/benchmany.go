@@ -44,7 +44,10 @@
 // finishing all of the iterations of the revisions it has started on
 // before moving on to new revisions. This way, if benchmany is
 // interrupted, the revisions benchmarked cover the space more-or-less
-// evenly.
+// evenly. Finally, it supports a "metric" mode, which zeroes in on
+// changes in a benchmark metric by selecting the commit half way
+// between the pair of commits with the biggest difference in the
+// metric. This is like "git bisect", but for performance.
 //
 // plot
 //

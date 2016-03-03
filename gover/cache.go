@@ -126,9 +126,7 @@ func listBuilds(flags listFlags) ([]*buildInfo, error) {
 		if flags&listCommit != 0 {
 			commit, err := ioutil.ReadFile(filepath.Join(*verDir, file.Name(), "commit"))
 			if err != nil {
-				if !os.IsNotExist(err) {
-					log.Fatal(err)
-				}
+				log.Fatal(err)
 			} else {
 				info.commit = parseCommit(commit)
 			}

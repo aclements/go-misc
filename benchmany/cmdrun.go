@@ -37,6 +37,7 @@ var run struct {
 	saveTree   bool
 	timeout    time.Duration
 	clean      bool
+	cleanFlags string
 }
 
 var cmdRunFlags = flag.NewFlagSet(os.Args[0]+" run", flag.ExitOnError)
@@ -71,6 +72,7 @@ func init() {
 	f.DurationVar(&run.timeout, "timeout", 30*time.Minute, "time out a run after `duration`")
 	f.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
 	f.BoolVar(&run.clean, "clean", false, "run \"git clean -f\" after every checkout")
+	f.StringVar(&run.cleanFlags, "cleanflags", "", "add `flags` to git clean command")
 	registerSubcommand("run", "[flags] <revision range> - run benchmarks", cmdRun, f)
 }
 
@@ -321,7 +323,8 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 		git("checkout", "-q", commit.hash)
 
 		if run.clean {
-			git("clean", "-f")
+			args := append([]string{"-f"}, strings.Fields(run.cleanFlags)...)
+			git("clean", args...)
 		}
 
 		var buildCmd []string

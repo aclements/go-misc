@@ -30,7 +30,6 @@ import (
 var run struct {
 	order      string
 	metric     string
-	topLevel   string
 	benchFlags string
 	buildCmd   string
 	iterations int
@@ -98,8 +97,9 @@ func cmdRun() {
 
 	commits := getCommits(cmdRunFlags.Args())
 
-	// Get other git information.
-	run.topLevel = trimNL(git("rev-parse", "--show-toplevel"))
+	// Always run git from the top level of the git tree. Some
+	// commands, like git clean, care about this.
+	gitDir = trimNL(git("rev-parse", "--show-toplevel"))
 
 	status := NewStatusReporter()
 	defer status.Stop()
@@ -335,9 +335,9 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 			// make.bash. Otherwise, we assume that go
 			// test -c will build the necessary
 			// dependencies.
-			if exists(filepath.Join(run.topLevel, "src", "make.bash")) {
+			if exists(filepath.Join(gitDir, "src", "make.bash")) {
 				cmd := exec.Command("./make.bash")
-				cmd.Dir = filepath.Join(run.topLevel, "src")
+				cmd.Dir = filepath.Join(gitDir, "src")
 				if dryRun {
 					dryPrint(cmd)
 				} else if out, err := combinedOutputTimeout(cmd); err != nil {
@@ -414,7 +414,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 
 func doGoverSave() error {
 	cmd := exec.Command("gover", "save")
-	cmd.Dir = run.topLevel
+	cmd.Dir = gitDir
 	if dryRun {
 		dryPrint(cmd)
 		return nil

@@ -36,6 +36,7 @@ var run struct {
 	iterations int
 	saveTree   bool
 	timeout    time.Duration
+	clean      bool
 }
 
 var cmdRunFlags = flag.NewFlagSet(os.Args[0]+" run", flag.ExitOnError)
@@ -69,6 +70,7 @@ func init() {
 	f.BoolVar(&run.saveTree, "save-tree", false, "save Go trees using gover and run benchmarks under saved trees")
 	f.DurationVar(&run.timeout, "timeout", 30*time.Minute, "time out a run after `duration`")
 	f.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
+	f.BoolVar(&run.clean, "clean", false, "run \"git clean -f\" after every checkout")
 	registerSubcommand("run", "[flags] <revision range> - run benchmarks", cmdRun, f)
 }
 
@@ -317,6 +319,10 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 		// even if we're using gover because the benchmark
 		// itself might have changed (e.g., bug fixes).
 		git("checkout", "-q", commit.hash)
+
+		if run.clean {
+			git("clean", "-f")
+		}
 
 		var buildCmd []string
 		if commit.gover {

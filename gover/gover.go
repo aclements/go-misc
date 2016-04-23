@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Command gover manages saved versions of the Go tree.
+// Command gover manages saved Go build trees.
 //
 // gover saves builds of the Go source tree and runs commands using
-// saved Go versions. For example,
+// these saved Go versions. For example,
 //
 //     cd $GOROOT
 //     git checkout go1.5.1
@@ -17,6 +17,41 @@
 // will run "go install" using Go 1.5.1:
 //
 //     gover 1.5.1 install
+//
+//
+// Usage
+//
+//     gover [flags] save [name]
+//
+// Save current build under it's commit hash and, optionally, as
+// "name".
+//
+//     gover [flags] build [name]
+//
+// Like "save", but first run make.bash in the current tree.
+//
+//     gover [flags] <name> <args>...
+//
+// Run "go <args>..." using saved build <name>. <name> may be an
+// unambiguous commit hash or an explicit build name.
+//
+//     gover [flags] with <name> <command>...
+//
+// Run <command> with PATH and GOROOT for build <name>.
+//
+//     gover [flags] env <name>
+//
+// Print the environment for running commands in build <name>. This is
+// printed as shell code appropriate for eval.
+//
+//     gover [flags] list
+//
+// List saved builds.
+//
+//     gover [flags] gc
+//
+// Clean the deduplication cache. This is useful after removing saved
+// builds to free up space.
 package main
 
 import (
@@ -96,11 +131,11 @@ func main() {
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  %s [flags] save [name] - save current build\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] save [name] - save Go build tree\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current tree\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] <name> <args>... - run go <args> using build <name>\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] with <name> <command>... - run <command> with PATH and GOROOT for build <name>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] with <name> <command>... - run <command> using build <name>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] env <name> - print the environment for build <name> as shell code\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] gc - clean the deduplication cache", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\n\n")

@@ -40,6 +40,8 @@ import (
 // TODO: Consider also accepting a path for name, which could let this
 // replace rego.
 
+// TODO: Half of these global flags only apply to save and build.
+
 var (
 	verbose    = flag.Bool("v", false, "print commands being run")
 	verDir     = flag.String("dir", defaultVerDir(), "`directory` of saved Go roots")
@@ -96,7 +98,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  %s [flags] save [name] - save current build\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] <name> <args>... - run go <args> using build <name>\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] run <name> <command>... - run <command> using PATH and GOROOT for build <name>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] with <name> <command>... - run <command> with PATH and GOROOT for build <name>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] env <name> - print the environment for build <name> as shell code\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] build [name] - build and save current version\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
@@ -189,12 +191,12 @@ func main() {
 		}
 		doList()
 
-	case "run":
+	case "with":
 		if flag.NArg() < 3 {
 			flag.Usage()
 			os.Exit(2)
 		}
-		doRun(flag.Arg(1), flag.Args()[2:])
+		doWith(flag.Arg(1), flag.Args()[2:])
 
 	case "env":
 		if flag.NArg() != 2 {
@@ -218,7 +220,7 @@ func main() {
 		if _, ok := resolveName(flag.Arg(0)); !ok {
 			log.Fatalf("unknown name or subcommand `%s'", flag.Arg(0))
 		}
-		doRun(flag.Arg(0), append([]string{"go"}, flag.Args()[1:]...))
+		doWith(flag.Arg(0), append([]string{"go"}, flag.Args()[1:]...))
 	}
 }
 
@@ -285,6 +287,9 @@ func doSave(hash string, diff []byte) {
 	cpR(filepath.Join(goroot, "pkg", osArch), filepath.Join(savePath, "pkg", osArch))
 	cpR(filepath.Join(goroot, "pkg", "tool", osArch), filepath.Join(savePath, "pkg", "tool", osArch))
 	cpR(filepath.Join(goroot, "pkg", "include"), filepath.Join(savePath, "pkg", "include"))
+	// TODO: Use "go list" and save only the stuff depended on? Or
+	// maybe just save the types of files go list can return, plus
+	// "testdata" directories?
 	cpR(filepath.Join(goroot, "src"), filepath.Join(savePath, "src"))
 
 	if diff != nil {
@@ -344,7 +349,7 @@ func doList() {
 	}
 }
 
-func doRun(name string, cmd []string) {
+func doWith(name string, cmd []string) {
 	savePath, ok := resolveName(name)
 	if !ok {
 		log.Fatalf("unknown name `%s'", name)

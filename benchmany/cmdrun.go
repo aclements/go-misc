@@ -329,7 +329,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 
 		var buildCmd []string
 		if commit.gover {
-			buildCmd = []string{"gover", "run", commit.hash}
+			buildCmd = []string{"gover", "with", commit.hash}
 		} else {
 			// If this is the Go toolchain, do a full
 			// make.bash. Otherwise, we assume that go
@@ -380,7 +380,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 	}
 	args := append([]string{name}, strings.Fields(run.benchFlags)...)
 	if run.saveTree {
-		args = append([]string{"gover", "run", commit.hash}, args...)
+		args = append([]string{"gover", "with", commit.hash}, args...)
 	}
 	cmd := exec.Command(args[0], args[1:]...)
 	if dryRun {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/aclements/go-moremath/fit"
 	"golang.org/x/crypto/ssh/terminal"
 )
 
@@ -94,8 +95,8 @@ func (sr *StatusReporter) loop(updates <-chan statusUpdate) {
 			for i, t := range times {
 				weights[i] = math.Exp(-1 / float64(halfLife) * (now - t))
 			}
-			params := PolynomialRegression(1, times, progress, weights)
-			a, b := params[0], params[1]
+			reg := fit.PolynomialRegression(times, progress, weights, 1)
+			a, b := reg.Coefficients[0], reg.Coefficients[1]
 
 			// The intercept of a + b*x - 1 is the ending
 			// time.

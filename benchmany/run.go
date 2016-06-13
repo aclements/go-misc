@@ -39,17 +39,15 @@ var run struct {
 	cleanFlags string
 }
 
-var cmdRunFlags = flag.NewFlagSet(os.Args[0]+" run", flag.ExitOnError)
-
 func init() {
 	isXBenchmark := false
 	if abs, _ := os.Getwd(); strings.HasSuffix(abs, "golang.org/x/benchmarks/bench") {
 		isXBenchmark = true
 	}
 
-	f := cmdRunFlags
-	f.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s run [flags] <revision range>\n", os.Args[0])
+	f := flag.CommandLine
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <revision range>\n", os.Args[0])
 		f.PrintDefaults()
 	}
 	f.StringVar(&run.order, "order", "seq", "run benchmarks in `order`, which must be one of: seq, spread, metric")
@@ -72,12 +70,11 @@ func init() {
 	f.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
 	f.BoolVar(&run.clean, "clean", false, "run \"git clean -f\" after every checkout")
 	f.StringVar(&run.cleanFlags, "cleanflags", "", "add `flags` to git clean command")
-	registerSubcommand("run", "[flags] <revision range> - run benchmarks", cmdRun, f)
 }
 
-func cmdRun() {
-	if cmdRunFlags.NArg() < 1 {
-		cmdRunFlags.Usage()
+func doRun() {
+	if flag.NArg() < 1 {
+		flag.Usage()
 		os.Exit(2)
 	}
 
@@ -91,11 +88,11 @@ func cmdRun() {
 		pickCommit = pickCommitMetric
 	default:
 		fmt.Fprintf(os.Stderr, "unknown order: %s\n", run.order)
-		cmdRunFlags.Usage()
+		flag.Usage()
 		os.Exit(2)
 	}
 
-	commits := getCommits(cmdRunFlags.Args())
+	commits := getCommits(flag.Args())
 
 	// Always run git from the top level of the git tree. Some
 	// commands, like git clean, care about this.

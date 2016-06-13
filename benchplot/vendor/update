@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -e
+
+mv github.com github.com.old || true
+
+mkdir -p github.com/aclements/go-gg
+git -C $GOPATH/src/github.com/aclements/go-gg archive HEAD | tar xC github.com/aclements/go-gg
+
+mkdir -p github.com/aclements/go-moremath
+git -C $GOPATH/src/github.com/aclements/go-moremath archive HEAD | tar xC github.com/aclements/go-moremath

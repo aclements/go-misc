@@ -8,11 +8,10 @@
 //
 //      benchmany [-C git-dir] [-n iterations] <commit or range>...
 //
-// benchmany runs the benchmarks in the current directory
-// <iterations> times for each commit in <commit or range> and writes
-// the benchmark results to log.<commit hash>. Benchmarks may be Go
-// testing framework benchmarks or benchmarks from
-// golang.org/x/benchmarks.
+// benchmany runs the benchmarks in the current directory <iterations>
+// times for each commit in <commit or range> and writes the benchmark
+// results to bench.log. Benchmarks may be Go testing framework
+// benchmarks or benchmarks from golang.org/x/benchmarks.
 //
 // <commit or range>... can be either a list of individual commits or
 // a revision range. For the spelling of a revision range, see

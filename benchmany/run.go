@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"os"
@@ -15,6 +16,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aclements/go-misc/bench"
+	"github.com/aclements/go-moremath/stats"
 )
 
 // TODO: Check CPU performance governor before each benchmark.
@@ -22,10 +26,6 @@ import (
 // TODO: Support running pre-built binaries without specific hashes.
 // This is useful for testing things that aren't yet committed or that
 // require unusual build steps.
-
-// TODO: If we switched to the extended benchmark format and writing
-// out one big file, we could count runs using the configuration
-// blocks instead of the silly "PASS" search we use now.
 
 var run struct {
 	order      string
@@ -37,9 +37,13 @@ var run struct {
 	timeout    time.Duration
 	clean      bool
 	cleanFlags string
+
+	logPath string
+	binDir  string
 }
 
 func init() {
+	// TODO: This makes a mess of flags during testing.
 	isXBenchmark := false
 	if abs, _ := os.Getwd(); strings.HasSuffix(abs, "golang.org/x/benchmarks/bench") {
 		isXBenchmark = true
@@ -64,7 +68,8 @@ func init() {
 	}
 	f.StringVar(&run.buildCmd, "buildcmd", defaultBuildCmd, "build benchmark using \"`cmd` -o <bin>\"")
 	f.IntVar(&run.iterations, "n", 5, "run each benchmark `N` times")
-	f.StringVar(&outDir, "o", "", "write binaries and logs to `directory`")
+	f.StringVar(&run.logPath, "o", "bench.log", "write benchmark results to `file`")
+	f.StringVar(&run.binDir, "d", ".", "write binaries to `directory`")
 	f.BoolVar(&run.saveTree, "save-tree", false, "save Go trees using gover and run benchmarks under saved trees")
 	f.DurationVar(&run.timeout, "timeout", 30*time.Minute, "time out a run after `duration`")
 	f.BoolVar(&dryRun, "dry-run", false, "print commands but do not run them")
@@ -92,7 +97,7 @@ func doRun() {
 		os.Exit(2)
 	}
 
-	commits := getCommits(flag.Args())
+	commits := getCommits(flag.Args(), run.logPath)
 
 	// Always run git from the top level of the git tree. Some
 	// commands, like git clean, care about this.
@@ -278,12 +283,50 @@ func pickCommitMetric(commits []*commitInfo) *commitInfo {
 	}
 
 	// We're bounded from both sides and every commit we've run
-	// has the best stats we're going to get. Find the pair with
-	// the biggest difference in the metric.
+	// has the best stats we're going to get. Parse run.metric
+	// from the log file.
+	logf, err := os.Open(run.logPath)
+	if err != nil {
+		log.Fatal("opening benchmark log: ", err)
+	}
+	defer logf.Close()
+	bs, err := bench.Parse(logf)
+	if err != nil {
+		log.Fatal("parsing benchmark log for metrics: ", err)
+	}
+	results := make(map[string]map[string][]float64)
+	for _, b := range bs {
+		var hash string
+		if commitConfig, ok := b.Config["commit"]; !ok {
+			continue
+		} else {
+			hash = commitConfig.RawValue
+		}
+		result, ok := b.Result[run.metric]
+		if !ok {
+			continue
+		}
+
+		if results[hash] == nil {
+			results[hash] = make(map[string][]float64)
+		}
+		results[hash][b.Name] = append(results[hash][b.Name], result)
+	}
+	geomeans := make(map[string]float64)
+	for hash, benches := range results {
+		var means []float64
+		for _, results := range benches {
+			means = append(means, stats.Mean(results))
+		}
+		geomeans[hash] = stats.GeoMean(means)
+	}
+
+	// Find the pair of commits with the biggest difference in the
+	// metric.
 	prevI := -1
 	maxDiff, maxMid := -1.0, (*commitInfo)(nil)
 	for i, c := range commits {
-		if c.failed() || c.count == 0 {
+		if c.failed() || c.count == 0 || geomeans[c.hash] == 0 {
 			continue
 		}
 		if prevI == -1 {
@@ -295,7 +338,7 @@ func pickCommitMetric(commits []*commitInfo) *commitInfo {
 			// TODO: This isn't branch-aware. We should
 			// only compare commits with an ancestry
 			// relationship.
-			diff := math.Abs(c.getMetric(run.metric) - commits[prevI].getMetric(run.metric))
+			diff := math.Abs(geomeans[c.hash] - geomeans[commits[prevI].hash])
 			if diff > maxDiff {
 				maxDiff = diff
 				maxMid = commits[(prevI+i)/2]
@@ -311,7 +354,8 @@ func pickCommitMetric(commits []*commitInfo) *commitInfo {
 // the commit log to record the outcome.
 func runBenchmark(commit *commitInfo, status *StatusReporter) {
 	// Build the benchmark if necessary.
-	if !exists(commit.binPath) {
+	binPath := filepath.Join(run.binDir, commit.binPath())
+	if !exists(binPath) {
 		runStatus(status, commit, "building")
 
 		// Check out the appropriate commit. This is necessary
@@ -340,8 +384,7 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 				} else if out, err := combinedOutputTimeout(cmd); err != nil {
 					detail := indent(string(out)) + indent(err.Error())
 					fmt.Fprintf(os.Stderr, "failed to build toolchain at %s:\n%s", commit.hash, detail)
-					commit.buildFailed = true
-					commit.writeLog([]byte("BUILD FAILED:\n" + detail))
+					commit.logFailed(true, detail)
 					return
 				}
 				if run.saveTree && doGoverSave() == nil {
@@ -355,27 +398,25 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 		}
 
 		buildCmd = append(buildCmd, strings.Fields(run.buildCmd)...)
-		buildCmd = append(buildCmd, "-o", commit.binPath)
+		buildCmd = append(buildCmd, "-o", binPath)
 		cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
 		if dryRun {
 			dryPrint(cmd)
 		} else if out, err := combinedOutputTimeout(cmd); err != nil {
 			detail := indent(string(out)) + indent(err.Error())
 			fmt.Fprintf(os.Stderr, "failed to build tests at %s:\n%s", commit.hash, detail)
-			commit.buildFailed = true
-			commit.writeLog([]byte("BUILD FAILED:\n" + detail))
+			commit.logFailed(true, detail)
 			return
 		}
 	}
 
 	// Run the benchmark.
 	runStatus(status, commit, "running")
-	name := commit.binPath
-	if filepath.Base(name) == name {
+	if filepath.Base(binPath) == binPath {
 		// Make exec.Command treat this as a relative path.
-		name = "./" + name
+		binPath = "./" + binPath
 	}
-	args := append([]string{name}, strings.Fields(run.benchFlags)...)
+	args := append([]string{binPath}, strings.Fields(run.benchFlags)...)
 	if run.saveTree {
 		args = append([]string{"gover", "with", commit.hash}, args...)
 	}
@@ -387,26 +428,12 @@ func runBenchmark(commit *commitInfo, status *StatusReporter) {
 	}
 	out, err := combinedOutputTimeout(cmd)
 	if err == nil {
-		commit.count++
-		if c, f, _ := countRuns(bytes.NewBuffer(out)); c+f == 0 {
-			// This log doesn't count as a run, probably
-			// because it's missing a "PASS". Add one so
-			// we can read this back in properly later.
-			if !bytes.HasSuffix(out, []byte{'\n'}) {
-				out = append(out, '\n')
-			}
-			out = append(out, []byte("PASS\n")...)
-		}
+		commit.logRun(string(out))
 	} else {
-		fmt.Fprintf(os.Stderr, "failed to run benchmark at %s:\n%s", commit.hash, out)
-		commit.fails++
-		// Indent the output so we don't get confused by
-		// benchmarks in it or "PASS" lines.
-		out = []byte("FAILED:\n" + indent(string(out)) + indent(err.Error()))
+		detail := indent(string(out)) + indent(err.Error())
+		fmt.Fprintf(os.Stderr, "failed to run benchmark at %s:\n%s", commit.hash, detail)
+		commit.logFailed(false, detail)
 	}
-
-	// Write the benchmark output.
-	commit.writeLog(out)
 }
 
 func doGoverSave() error {

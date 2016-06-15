@@ -59,6 +59,17 @@ func defaultRevDir() string {
 //
 // This would also help with fixing the problem where hard build
 // failures are considered successes of all tests.
+//
+// This would also be more sound when builders are added at some point
+// in the history. If the probability of a failure is really constant
+// per build, adding a builder will increase the probability of seeing
+// the failure at the commit level. Of course, if it's conditional on
+// OS or architecture or builder, this will make it look *less* likely
+// at the build level.
+//
+// Along these lines, the culprit analysis should have the property
+// that do more runs around possible culprit commits should improve
+// the fidelity of the culprit results.
 
 // TODO: Support pointing this at a set of stress test failures (along
 // with the count of total runs, I guess) and having it classify and
@@ -70,7 +81,8 @@ func defaultRevDir() string {
 // It also makes sense to point this at a stress test of a sequence of
 // commits, in which case the culprit analysis is still useful. This
 // probably integrates well with the previous TODO of considering each
-// build a separate event.
+// build a separate event, and it's closely related to the problem of
+// new builders being added.
 
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")

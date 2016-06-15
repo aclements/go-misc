@@ -27,7 +27,8 @@ var (
 
 	// TODO: Is this really just a separate mode? Should we have
 	// subcommands?
-	flagGrep = flag.String("grep", "", "show analysis for logs matching `regexp`")
+	flagGrep  = flag.String("grep", "", "show analysis for logs matching `regexp`")
+	flagPaths = flag.Bool("paths", false, "read dir-relative paths of logs with failures from stdin (useful with greplogs -l)")
 )
 
 func defaultRevDir() string {
@@ -117,6 +118,21 @@ func main() {
 			log.Fatal(err)
 		}
 		failures := grepFailures(revs, re)
+		if len(failures) == 0 {
+			return
+		}
+		fc := newFailureClass(revs, failures)
+		printTextFlakeReport(os.Stdout, fc)
+		return
+	}
+
+	if *flagPaths {
+		// Paths mode.
+		paths, err := readPaths(os.Stdin)
+		if err != nil {
+			log.Fatal(err)
+		}
+		failures := pathFailures(revs, paths)
 		if len(failures) == 0 {
 			return
 		}

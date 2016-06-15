@@ -77,6 +77,10 @@ import (
 
 // TODO: Half of these global flags only apply to save and build.
 
+// TODO: The hash and diff hash aren't everything. Environment
+// variables like GOEXPERIMENT also affect the build, but right now
+// goenv save will complain that the hash already exists.
+
 var (
 	verbose    = flag.Bool("v", false, "print commands being run")
 	verDir     = flag.String("dir", defaultVerDir(), "`directory` of saved Go roots")
@@ -160,6 +164,11 @@ func main() {
 
 	switch flag.Arg(0) {
 	case "save", "build":
+		// TODO: Annoying: if gover save has already saved a
+		// commit by its hash, you can't then "gover save x"
+		// to name it. You have to "gover build x", but you're
+		// not building at all.
+
 		if flag.NArg() > 2 {
 			flag.Usage()
 			os.Exit(2)

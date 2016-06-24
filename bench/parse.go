@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package bench reads Go benchmarks results files.
+// Package bench reads and writes Go benchmarks results files.
 //
 // This format is specified at:
 // https://github.com/golang/proposal/blob/master/design/14313-benchmark-format.md

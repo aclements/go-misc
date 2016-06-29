@@ -261,25 +261,27 @@ func pickCommitMetric(commits []*commitInfo) *commitInfo {
 		}
 	}
 
-	// Make sure we've run the most recent commit.
+	// Remove failed commits. This makes it easier to avoid
+	// picking a failed commit below.
+	ncommits := []*commitInfo{}
 	for _, c := range commits {
-		if c.runnable() {
-			return c
-		}
 		if !c.failed() {
-			break
+			ncommits = append(ncommits, c)
 		}
+	}
+	commits = ncommits
+	if len(ncommits) == 0 {
+		return nil
+	}
+
+	// Make sure we've run the most recent commit.
+	if commits[0].runnable() {
+		return commits[0]
 	}
 
 	// Make sure we've run the earliest commit.
-	for i := len(commits) - 1; i >= 0; i-- {
-		c := commits[i]
-		if c.runnable() {
-			return c
-		}
-		if !c.failed() {
-			break
-		}
+	if c := commits[len(commits)-1]; c.runnable() {
+		return c
 	}
 
 	// We're bounded from both sides and every commit we've run
@@ -326,7 +328,7 @@ func pickCommitMetric(commits []*commitInfo) *commitInfo {
 	prevI := -1
 	maxDiff, maxMid := -1.0, (*commitInfo)(nil)
 	for i, c := range commits {
-		if c.failed() || c.count == 0 || geomeans[c.hash] == 0 {
+		if c.count == 0 || geomeans[c.hash] == 0 {
 			continue
 		}
 		if prevI == -1 {

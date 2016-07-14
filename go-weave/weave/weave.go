@@ -17,14 +17,15 @@ type Scheduler struct {
 	as amb.Scheduler
 
 	nextid               int
-	threads              []*thread
+	runnable             []*thread
 	runThread, curThread *thread
 	goErr                interface{}
 }
 
 type thread struct {
-	id   int
-	wake chan bool
+	id    int
+	index int // Index in Scheduler.runnable
+	wake  chan bool
 }
 
 func (t *thread) String() string {
@@ -39,15 +40,15 @@ func (s *Scheduler) Run(main func()) {
 	s.as.Run(func() {
 		// Initialize state.
 		s.nextid = 0
-		s.threads = nil
-		s.runThread = &thread{-1, make(chan bool)}
+		s.runnable = nil
+		s.runThread = &thread{-1, -1, make(chan bool)}
 		s.curThread = s.runThread
 		s.goErr = nil
 		s.Go(main)
 		if goErr := s.goErr; goErr != nil {
 			// Exit all threads. They should all be
 			// stopped in desched right now.
-			for _, thr := range s.threads {
+			for _, thr := range s.runnable {
 				thr.wake <- false
 			}
 			panic(goErr)
@@ -59,9 +60,9 @@ func (s *Scheduler) Run(main func()) {
 }
 
 func (s *Scheduler) Go(f func()) {
-	thr := &thread{s.nextid, make(chan bool)}
+	thr := &thread{s.nextid, len(s.runnable), make(chan bool)}
+	s.runnable = append(s.runnable, thr)
 	s.nextid++
-	s.threads = append(s.threads, thr)
 	go func() {
 		defer func() {
 			goErr := recover()
@@ -71,7 +72,7 @@ func (s *Scheduler) Go(f func()) {
 				}
 				return
 			}
-			// Remove this thread.
+
 			if debug {
 				if goErr != nil {
 					fmt.Printf("%v panicked: %v\n", thr, goErr)
@@ -79,16 +80,12 @@ func (s *Scheduler) Go(f func()) {
 					fmt.Printf("%v exiting normally\n", thr)
 				}
 			}
-			for i, thr2 := range s.threads {
-				if thr == thr2 {
-					copy(s.threads[i:], s.threads[i+1:])
-					s.threads = s.threads[:len(s.threads)-1]
-					goto found
-				}
-			}
-			panic("thread not found in threads")
 
-		found:
+			// Remove this thread from runnable.
+			s.runnable[thr.index] = s.runnable[len(s.runnable)-1]
+			s.runnable[thr.index].index = thr.index
+			s.runnable = s.runnable[:len(s.runnable)-1]
+
 			// If we're panicking, pass the error to Run
 			// so it can shut down this execution.
 			if goErr != nil {
@@ -96,6 +93,7 @@ func (s *Scheduler) Go(f func()) {
 				s.runThread.wake <- true
 				return
 			}
+
 			// Otherwise, this is a regular thread exit.
 			// Close our wake channel so Sched returns
 			// immediately and release this goroutine.
@@ -126,15 +124,15 @@ func (s *Scheduler) Sched() {
 	this := s.curThread
 
 	// Pick a thread to run next.
-	if len(s.threads) == 0 {
+	if len(s.runnable) == 0 {
 		// The last thread exited. Return to the Run thread.
 		s.runThread.wake <- true
 		return
 	}
-	s.curThread = s.threads[s.as.Amb(len(s.threads))]
+	s.curThread = s.runnable[s.as.Amb(len(s.runnable))]
 
 	if debug {
-		fmt.Printf("scheduling %v from %v\n", s.curThread, s.threads)
+		fmt.Printf("scheduling %v from %v\n", s.curThread, s.runnable)
 	}
 
 	// Switch to that thread.

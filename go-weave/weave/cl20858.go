@@ -11,12 +11,14 @@ import (
 	"github.com/aclements/go-misc/go-weave/weave"
 )
 
+var sched = weave.Scheduler{Strategy: &amb.StrategyDFS{}}
+
 func mainOld() {
-	weave.Run(func() {
+	sched.Run(func() {
 		runnext, runqhead, runqtail = 0, 0, 0
 
 		runqput(1)
-		weave.Go(func() {
+		sched.Go(func() {
 			runqput(2)
 			runqget()
 		})
@@ -27,21 +29,14 @@ func mainOld() {
 }
 
 func main() {
-	type state struct {
-		runnext            int
-		runqhead, runqtail int
-	}
-	weave.State = func() interface{} {
-		return state{runnext, runqhead, runqtail}
-	}
 	states := 0
-	weave.Run(func() {
+	sched.Run(func() {
 		states++
 		runnext, runqhead, runqtail = 0, 0, 0
 
-		weave.Go(func() {
+		sched.Go(func() {
 			for i := 0; i < 5; i++ {
-				if amb.Amb(2) == 0 {
+				if sched.Amb(2) == 0 {
 					runqget()
 				} else {
 					runqput(1)
@@ -49,14 +44,6 @@ func main() {
 			}
 		})
 		var empty, nonempty, checks int
-		weave.Monitor = func() {
-			if runqhead == runqtail && runnext == 0 {
-				empty++
-			} else {
-				nonempty++
-			}
-			checks++
-		}
 		v := runqempty()
 		if empty == 0 && v == true {
 			panic("spurious runqempty()")
@@ -75,20 +62,20 @@ var runq [256]int
 func runqput(g int) {
 	old := runnext
 	runnext = g
-	weave.Sched()
+	sched.Sched()
 	if old == 0 {
 		return
 	}
 
 	h := runqhead
-	weave.Sched()
+	sched.Sched()
 	t := runqtail
-	weave.Sched()
+	sched.Sched()
 	if t-h < len(runq) {
 		runq[t%len(runq)] = g
-		weave.Sched()
+		sched.Sched()
 		runqtail = t + 1
-		weave.Sched()
+		sched.Sched()
 		return
 	}
 	panic("runq full")
@@ -98,23 +85,23 @@ func runqget() int {
 	next := runnext
 	if next != 0 {
 		runnext = 0
-		weave.Sched()
+		sched.Sched()
 		return next
 	}
 
 	for {
 		h := runqhead
-		weave.Sched()
+		sched.Sched()
 		t := runqtail
-		weave.Sched()
+		sched.Sched()
 		if t == h {
 			return 0
 		}
 		g := runq[h%len(runq)]
-		weave.Sched()
+		sched.Sched()
 		if runqhead == h {
 			runqhead = h + 1
-			weave.Sched()
+			sched.Sched()
 			return g
 		}
 	}
@@ -122,24 +109,24 @@ func runqget() int {
 
 func runqemptyOld() bool {
 	h := runqhead
-	weave.Sched()
+	sched.Sched()
 	t := runqtail
-	weave.Sched()
+	sched.Sched()
 	n := runnext
-	weave.Sched()
+	sched.Sched()
 	return h == t && n == 0
 }
 
 func runqempty() bool {
 	for {
 		h := runqhead
-		weave.Sched()
+		sched.Sched()
 		t := runqtail
-		weave.Sched()
+		sched.Sched()
 		n := runnext
-		weave.Sched()
+		sched.Sched()
 		t2 := runqtail
-		weave.Sched()
+		sched.Sched()
 		if t == t2 {
 			return h == t && n == 0
 		}
@@ -149,11 +136,11 @@ func runqempty() bool {
 func runqemptyTest() bool {
 	for {
 		h := runqhead
-		weave.Sched()
+		sched.Sched()
 		n := runnext
-		weave.Sched()
+		sched.Sched()
 		t := runqtail
-		weave.Sched()
+		sched.Sched()
 		return h == t && n == 0
 	}
 }

@@ -49,8 +49,10 @@ var busy int
 
 const verbose = false
 
+var sched = weave.Scheduler{Strategy: &amb.StrategyRandom{}}
+
 func main() {
-	weave.Run(func() {
+	sched.Run(func() {
 		if verbose {
 			print("start:")
 		}
@@ -77,7 +79,7 @@ func main() {
 		// Start mutators.
 		for i := 0; i < numThreads; i++ {
 			i := i
-			weave.Go(func() { mutator(i) })
+			sched.Go(func() { mutator(i) })
 		}
 
 		// Re-scan stacks.
@@ -93,7 +95,7 @@ func main() {
 			if verbose {
 				println("waiting on barrier", busy)
 			}
-			weave.Sched()
+			sched.Sched()
 		}
 
 		// Check that everything is marked.
@@ -109,7 +111,7 @@ func main() {
 
 // ambHeapPointer returns nil or an ambiguous heap pointer.
 func ambHeapPointer() ptr {
-	x := amb.Amb(len(mem) - int(globalRoot) + 1)
+	x := sched.Amb(len(mem) - int(globalRoot) + 1)
 	if x == 0 {
 		return 0
 	}
@@ -128,7 +130,7 @@ func ambReachableHeapPointer() ptr {
 			nreachable++
 		}
 	}
-	x := amb.Amb(nreachable)
+	x := sched.Amb(nreachable)
 	for i, m := range reachable[globalRoot:] {
 		if m {
 			if x == 0 {
@@ -159,7 +161,7 @@ func wbarrier(slot, val ptr) {
 		}
 	}
 	mem[slot].l = mem[val].l
-	weave.Sched()
+	sched.Sched()
 }
 
 func mutator(id int) {
@@ -182,7 +184,7 @@ func mutator(id int) {
 	// is a stack write.
 	obj = ambReachableHeapPointer()
 	mem[sptr].l = mem[obj].l
-	weave.Sched()
+	sched.Sched()
 }
 
 func mark(p ptr, marked []bool, name string) {
@@ -197,11 +199,11 @@ func mark(p ptr, marked []bool, name string) {
 	}
 	mark(mem[p].l, marked, name)
 	if name != "" {
-		weave.Sched()
+		sched.Sched()
 	}
 	mark(mem[p].r, marked, name)
 	if name != "" {
-		weave.Sched()
+		sched.Sched()
 	}
 }
 

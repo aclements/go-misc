@@ -25,6 +25,7 @@ func startProgress() {
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-progressDone:
+				fmt.Fprintf(os.Stderr, "%s%d done\n", resetLine, atomic.LoadInt64(&count))
 				close(progressDone)
 				return
 			}

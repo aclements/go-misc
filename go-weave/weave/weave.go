@@ -5,6 +5,7 @@
 package weave
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/aclements/go-misc/go-weave/amb"
@@ -43,9 +44,13 @@ func (s *Scheduler) Run(main func()) {
 		s.curThread = s.runThread
 		s.goErr = nil
 		s.Go(main)
-		if s.goErr != nil {
-			// TODO: Abort all threads.
-			panic(s.goErr)
+		if goErr := s.goErr; goErr != nil {
+			// Exit all threads. They should all be
+			// stopped in desched right now.
+			for _, thr := range s.threads {
+				thr.wake <- false
+			}
+			panic(goErr)
 		}
 		if debug {
 			fmt.Println("run done")
@@ -60,38 +65,62 @@ func (s *Scheduler) Go(f func()) {
 	go func() {
 		defer func() {
 			goErr := recover()
-			if goErr != nil {
-				// Return to the Run thread.
-				s.goErr = goErr
+			if goErr == threadAbort {
 				if debug {
-					fmt.Printf("%v panicked: %v\n", thr, goErr)
+					fmt.Printf("%v aborted\n", thr)
 				}
-				s.runThread.wake <- true
 				return
 			}
 			// Remove this thread.
 			if debug {
-				fmt.Printf("%v exited\n", thr)
+				if goErr != nil {
+					fmt.Printf("%v panicked: %v\n", thr, goErr)
+				} else {
+					fmt.Printf("%v exiting normally\n", thr)
+				}
 			}
 			for i, thr2 := range s.threads {
 				if thr == thr2 {
 					copy(s.threads[i:], s.threads[i+1:])
 					s.threads = s.threads[:len(s.threads)-1]
-					close(thr.wake)
-					s.Sched()
-					return
+					goto found
 				}
 			}
 			panic("thread not found in threads")
+
+		found:
+			// If we're panicking, pass the error to Run
+			// so it can shut down this execution.
+			if goErr != nil {
+				s.goErr = goErr
+				s.runThread.wake <- true
+				return
+			}
+			// Otherwise, this is a regular thread exit.
+			// Close our wake channel so Sched returns
+			// immediately and release this goroutine.
+			close(thr.wake)
+			s.Sched()
 		}()
 		if debug {
 			fmt.Printf("%v started\n", thr)
 		}
-		<-thr.wake
+		thr.desched()
 		f()
 	}()
 	s.Sched()
 }
+
+// desched deschedules thread t until the scheduler selects it or all
+// threads are aborted. In the case of a thread abort, it panics with
+// threadAbort.
+func (t *thread) desched() {
+	if cont, ok := <-t.wake; ok && !cont {
+		panic(threadAbort)
+	}
+}
+
+var threadAbort = errors.New("thread aborted because of panic in another thread")
 
 func (s *Scheduler) Sched() {
 	this := s.curThread
@@ -113,7 +142,7 @@ func (s *Scheduler) Sched() {
 		return
 	}
 	s.curThread.wake <- true
-	<-this.wake
+	this.desched()
 }
 
 func (s *Scheduler) Amb(n int) int {

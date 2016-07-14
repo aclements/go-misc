@@ -18,14 +18,20 @@ type Scheduler struct {
 
 	nextid               int
 	runnable             []*thread
+	blocked              []*thread
 	runThread, curThread *thread
 	goErr                interface{}
 }
 
+var globalSched *Scheduler
+
 type thread struct {
-	id    int
-	index int // Index in Scheduler.runnable
-	wake  chan bool
+	sched   *Scheduler
+	id      int
+	index   int // Index in Scheduler.runnable or .blocked
+	blocked bool
+	wake    chan bool // Send true to continue, false to abort
+	aborted chan bool
 }
 
 func (t *thread) String() string {
@@ -34,22 +40,45 @@ func (t *thread) String() string {
 
 const debug = false
 
+func (s *Scheduler) newThread() *thread {
+	thr := &thread{s, s.nextid, -1, false, make(chan bool), make(chan bool)}
+	s.nextid++
+	if thr.id != -1 {
+		thr.index = len(s.runnable)
+		s.runnable = append(s.runnable, thr)
+	}
+	return thr
+}
+
 func (s *Scheduler) Run(main func()) {
+	if globalSched != nil {
+		panic("only one weave.Scheduler can be active at a time")
+	}
+	globalSched = s
+	defer func() { globalSched = nil }()
+
 	s.as = amb.Scheduler{Strategy: s.Strategy}
 
 	s.as.Run(func() {
 		// Initialize state.
-		s.nextid = 0
+		s.nextid = -1
 		s.runnable = nil
-		s.runThread = &thread{-1, -1, make(chan bool)}
+		s.runThread = s.newThread()
 		s.curThread = s.runThread
 		s.goErr = nil
 		s.Go(main)
 		if goErr := s.goErr; goErr != nil {
 			// Exit all threads. They should all be
-			// stopped in desched right now.
+			// stopped in desched right now. Do this
+			// sequentially so defer blocks can clean up
+			// sequentially.
 			for _, thr := range s.runnable {
 				thr.wake <- false
+				<-thr.aborted
+			}
+			for _, thr := range s.blocked {
+				thr.wake <- false
+				<-thr.aborted
 			}
 			panic(goErr)
 		}
@@ -60,9 +89,7 @@ func (s *Scheduler) Run(main func()) {
 }
 
 func (s *Scheduler) Go(f func()) {
-	thr := &thread{s.nextid, len(s.runnable), make(chan bool)}
-	s.runnable = append(s.runnable, thr)
-	s.nextid++
+	thr := s.newThread()
 	go func() {
 		defer func() {
 			goErr := recover()
@@ -70,6 +97,7 @@ func (s *Scheduler) Go(f func()) {
 				if debug {
 					fmt.Printf("%v aborted\n", thr)
 				}
+				thr.aborted <- true
 				return
 			}
 
@@ -88,6 +116,8 @@ func (s *Scheduler) Go(f func()) {
 
 			// If we're panicking, pass the error to Run
 			// so it can shut down this execution.
+			//
+			// TODO: Capture the stack trace.
 			if goErr != nil {
 				s.goErr = goErr
 				s.runThread.wake <- true
@@ -145,4 +175,44 @@ func (s *Scheduler) Sched() {
 
 func (s *Scheduler) Amb(n int) int {
 	return s.as.Amb(n)
+}
+
+func (t *thread) block(abortf func()) {
+	if t.blocked {
+		panic("thread blocked multiple times")
+	}
+	t.blocked = true
+
+	s := t.sched
+	s.runnable[t.index] = s.runnable[len(s.runnable)-1]
+	s.runnable[t.index].index = t.index
+	s.runnable = s.runnable[:len(s.runnable)-1]
+
+	t.index = len(s.blocked)
+	s.blocked = append(s.blocked, t)
+
+	if abortf != nil {
+		defer func() {
+			if abortf != nil {
+				abortf()
+			}
+		}()
+	}
+	t.sched.Sched()
+	abortf = nil
+}
+
+func (t *thread) unblock() {
+	if !t.blocked {
+		panic("thread unblocked while not blocked")
+	}
+	t.blocked = false
+
+	s := t.sched
+	s.blocked[t.index] = s.blocked[len(s.blocked)-1]
+	s.blocked[t.index].index = t.index
+	s.blocked = s.blocked[:len(s.blocked)-1]
+
+	t.index = len(s.runnable)
+	s.runnable = append(s.runnable, t)
 }

@@ -45,7 +45,7 @@ const stackBase ptr = 1
 const globalRoot ptr = stackBase + ptr(numThreads)
 
 var scanClock int
-var busy int
+var world weave.RWMutex
 
 const verbose = false
 
@@ -72,6 +72,7 @@ func main() {
 			printMem(mem, marked)
 		}
 		scanClock = 0
+		world = weave.RWMutex{} // Belt and suspenders.
 
 		// Mark the global root.
 		mark(globalRoot, marked, "globalRoot")
@@ -90,13 +91,10 @@ func main() {
 			scanClock++
 			mark(mem[stackBase+ptr(scanClock-1)].l, marked, "scan")
 		}
-		for busy > 0 {
-			// XXX This has liveness problems.
-			if verbose {
-				println("waiting on barrier", busy)
-			}
-			sched.Sched()
-		}
+
+		// Wait for write barriers to complete.
+		world.Lock()
+		defer world.Unlock()
 
 		// Check that everything is marked.
 		if verbose {
@@ -150,9 +148,12 @@ func wbarrier(slot, val ptr) {
 
 	if val != 0 {
 		if writeMarks {
-			busy++
-			mark(mem[val].l, marked, "barrier")
-			busy--
+			func() {
+				// Block STW termination while marking.
+				world.RLock()
+				defer world.RUnlock()
+				mark(mem[val].l, marked, "barrier")
+			}()
 		}
 		if writeRestarts {
 			if !marked[val] {

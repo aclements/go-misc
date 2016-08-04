@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"io"
 	"log"
 	"math/big"
 	"os"
@@ -100,17 +101,21 @@ func main() {
 		m.WriteTo(os.Stderr)
 	}
 
+	stringSpace := NewStringSpace()
 	s := state{
 		fset: fset,
 		cg:   cg,
 		pta:  pta,
 		fns:  make(map[*ssa.Function]*funcInfo),
+
+		lockOrder: NewLockOrder(stringSpace),
 	}
 	m := runtimePkg.Members["newobject"].(*ssa.Function)
-	stringSpace := NewStringSpace()
 	// TODO: Warn if any locks are held at return.
 	exitLockSets := s.walkFunction(m, stringSpace.NewSet())
 	log.Print("locks at return: ", exitLockSets)
+
+	s.lockOrder.WriteToDot(os.Stdout)
 
 	// fmt.Println("digraph x {")
 	// for _, b := range m.Blocks {
@@ -471,6 +476,12 @@ func (set *LockSet) Plus(s pointer.PointsToSet) *LockSet {
 	return out
 }
 
+func (set *LockSet) Union(o *LockSet) *LockSet {
+	out := set.sp.NewSet()
+	out.bits.Or(&set.bits, &o.bits)
+	return out
+}
+
 func (set *LockSet) Minus(s pointer.PointsToSet) *LockSet {
 	var out *LockSet
 	for _, label := range s.Labels() {
@@ -487,6 +498,16 @@ func (set *LockSet) Minus(s pointer.PointsToSet) *LockSet {
 	if out == nil {
 		return set
 	}
+	return out
+}
+
+func (set *LockSet) MinusLabel(label string) *LockSet {
+	id := set.sp.Intern(label)
+	if set.bits.Bit(id) == 0 {
+		return set
+	}
+	out := set.sp.NewSet()
+	out.bits.SetBit(&set.bits, id, 0)
 	return out
 }
 
@@ -548,6 +569,44 @@ func (lss *LockSetSet) String() string {
 	return string(append(b, '}'))
 }
 
+type LockOrder struct {
+	sp *StringSpace
+	m  map[int]*LockSet
+}
+
+func NewLockOrder(sp *StringSpace) *LockOrder {
+	return &LockOrder{sp, make(map[int]*LockSet)}
+}
+
+func (lo *LockOrder) Add(held *LockSet, acquiring pointer.PointsToSet) {
+	als := lo.sp.NewSet().Plus(acquiring)
+	for i := 0; i < held.bits.BitLen(); i++ {
+		if held.bits.Bit(i) != 0 {
+			targets := lo.m[i]
+			if targets == nil {
+				targets = als
+			} else {
+				targets = targets.Union(als)
+			}
+			lo.m[i] = targets
+		}
+	}
+}
+
+func (lo *LockOrder) WriteToDot(w io.Writer) {
+	fmt.Fprintf(w, "digraph locks {\n")
+	for from, to := range lo.m {
+		fromName := lo.sp.s[from]
+		for i := 0; i < to.bits.BitLen(); i++ {
+			if to.bits.Bit(i) != 0 {
+				toName := lo.sp.s[i]
+				fmt.Fprintf(w, "  %q -> %q;\n", fromName, toName)
+			}
+		}
+	}
+	fmt.Fprintf(w, "}\n")
+}
+
 type funcInfo struct {
 	// exitLockSets maps from entry lock set to set of exit lock
 	// sets. It memoizes the result of walkFunction.
@@ -566,6 +625,8 @@ type state struct {
 	pta   *pointer.Result
 	fns   map[*ssa.Function]*funcInfo
 	stack []*ssa.Function
+
+	lockOrder *LockOrder
 }
 
 // walkFunction explores f, given locks held on entry to f. It returns
@@ -732,11 +793,12 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 
 			nextLockSets := NewLockSetSet()
 			for _, o := range outs {
-				fmt.Printf("%q -> %q;\n", f.String(), o.String())
+				//fmt.Printf("%q -> %q;\n", f.String(), o.String())
 				// TODO: _Gscan locks, misc locks
 				if o == lockFn {
 					lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
 					for _, ls := range lockSets.M {
+						s.lockOrder.Add(ls, lock)
 						ls = ls.Plus(lock)
 						nextLockSets.Add(ls)
 					}
@@ -763,6 +825,22 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 			// current lock set to exitLockSets.
 			//
 			// TODO: Handle defers.
+
+			// Special case: we can't handle
+			// inter-procedural correlated control flow
+			// between traceAcquireBuffer and
+			// traceReleaseBuffer, so hard-code that
+			// traceReleaseBuffer releases
+			// runtime.trace.bufLock.
+			if f.Name() == "traceReleaseBuffer" {
+				nextLockSets := NewLockSetSet()
+				for _, ls := range lockSets.M {
+					ls = ls.MinusLabel("runtime.trace.bufLock")
+					nextLockSets.Add(ls)
+				}
+				lockSets = nextLockSets
+			}
+
 			exitLockSets.Union(lockSets)
 		}
 	}

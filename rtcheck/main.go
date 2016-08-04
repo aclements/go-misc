@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/constant"
 	"go/parser"
 	"go/printer"
 	"go/token"
@@ -548,13 +549,15 @@ func (lss *LockSetSet) String() string {
 }
 
 type funcInfo struct {
-	// external indicates that this function is external and that
-	// a warning has been printed for this.
-	external bool
-
 	// exitLockSets maps from entry lock set to set of exit lock
 	// sets. It memoizes the result of walkFunction.
 	exitLockSets map[LockSetKey]*LockSetSet
+
+	// ifDeps records the set of control-flow dependencies for
+	// each ssa.BasicBlock of this function. These are the values
+	// at entry to each block that may affect future control flow
+	// decisions.
+	ifDeps []map[ssa.Instruction]struct{}
 }
 
 type state struct {
@@ -569,7 +572,8 @@ type state struct {
 // the set of locksets that can be held on exit from f.
 //
 // This implements the lockset algorithm from Engler and Ashcroft,
-// SOSP 2003.
+// SOSP 2003, plus simple path sensitivity to reduce mistakes from
+// correlated control flow.
 //
 // TODO: Does this also have to return all locks acquired, even those
 // that are released by the time f returns?
@@ -579,10 +583,53 @@ type state struct {
 func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	fInfo := s.fns[f]
 	if fInfo == nil {
+		// First visit of this function.
+
+		// Compute control-flow dependencies.
+		//
+		// TODO: Figure out which control flow decisions
+		// actually affect locking and only track those. Right
+		// now we hit a lot of simple increment loops that
+		// cause path aborts, but don't involve any locking.
+		var ifInstrs []ssa.Instruction
+		for _, b := range f.Blocks {
+			if len(b.Instrs) == 0 {
+				continue
+			}
+			instr, ok := b.Instrs[len(b.Instrs)-1].(*ssa.If)
+			if !ok {
+				continue
+			}
+			ifInstrs = append(ifInstrs, instr)
+		}
+		ifDeps := livenessFor(f, ifInstrs)
+		if false { // Debug
+			f.WriteTo(os.Stderr)
+			for bid, vals := range ifDeps {
+				fmt.Fprintf(os.Stderr, "%d: ", bid)
+				for dep := range vals {
+					fmt.Fprintf(os.Stderr, " %s", dep.(ssa.Value).Name())
+				}
+				fmt.Fprintf(os.Stderr, "\n")
+			}
+		}
+
 		fInfo = &funcInfo{
 			exitLockSets: make(map[LockSetKey]*LockSetSet),
+			ifDeps:       ifDeps,
 		}
 		s.fns[f] = fInfo
+
+		if f.Blocks == nil {
+			log.Println("warning: external function", f.Name())
+		}
+	}
+
+	if f.Blocks == nil {
+		// External function. Assume it doesn't affect locks.
+		lss1 := NewLockSetSet()
+		lss1.Add(locks)
+		return lss1
 	}
 
 	// Check memoization cache.
@@ -604,20 +651,9 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	s.stack = append(s.stack, f)
 	defer func() { s.stack = s.stack[:len(s.stack)-1] }()
 
-	if f.Blocks == nil {
-		if !fInfo.external {
-			fInfo.external = true
-			log.Println("warning: external function", f.Name())
-		}
-		// Assume it doesn't affect locks.
-		lss1 := NewLockSetSet()
-		lss1.Add(locks)
-		return lss1
-	}
-
-	blockCache := make(map[blockCacheKey]struct{})
+	blockCache := make(map[blockCacheKey][]blockCacheKey2)
 	exitLockSets := NewLockSetSet()
-	s.walkBlock(f, f.Blocks[0], blockCache, locks, exitLockSets)
+	s.walkBlock(f, f.Blocks[0], blockCache, nil, locks, exitLockSets)
 	fInfo.exitLockSets[locksKey] = exitLockSets
 	log.Printf("%s: %s -> %s", f.Name(), locks, exitLockSets)
 	return exitLockSets
@@ -628,26 +664,53 @@ type blockCacheKey struct {
 	lockset LockSetKey
 }
 
-func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blockCacheKey]struct{}, enterLockSet *LockSet, exitLockSets *LockSetSet) {
+type blockCacheKey2 struct {
+	vs *ValState
+}
+
+func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blockCacheKey][]blockCacheKey2, vs *ValState, enterLockSet *LockSet, exitLockSets *LockSetSet) {
 	bck := blockCacheKey{b, enterLockSet.Key()}
-	if _, ok := blockCache[bck]; ok {
-		// Terminate recursion. Some other path has already
-		// visited here with this lock set.
-		return
+	if bck2s, ok := blockCache[bck]; ok {
+		for _, bck2 := range bck2s {
+			if bck2.vs.EqualAt(vs, s.fns[f].ifDeps[b.Index]) {
+				// Terminate recursion. Some other
+				// path has already visited here with
+				// this lock set and value state.
+				return
+			}
+		}
+		if len(bck2s) > 10 {
+			log.Print("warning: too many states at ", f.Name(), " block ", b.Index, "; giving up on path")
+			// for _, bck2 := range bck2s {
+			// 	log.Print("next ", f.Name(), ":", b.Index)
+			// 	bck2.vs.WriteTo(os.Stderr)
+			// }
+			return
+		}
 	}
-	blockCache[bck] = struct{}{}
+	blockCache[bck] = append(blockCache[bck], blockCacheKey2{vs})
 
 	// For each instruction, compute the effect of that
 	// instruction on all possible lock sets at that point.
 	lockSets := NewLockSetSet()
 	lockSets.Add(enterLockSet)
 	var outs [10]*ssa.Function
+	var ifCond ssa.Value
 	for _, instr := range b.Instrs {
-		// TODO: There are other types of
-		// ssa.CallInstructions, but they have different
-		// control flow.
+		// Update value state with the effect of this
+		// instruction.
+		vs = vs.Do(instr)
+
 		switch instr := instr.(type) {
+		case *ssa.If:
+			// We'll bind ifCond to true or false when we
+			// visit successors.
+			ifCond = instr.Cond
+
 		case *ssa.Call:
+			// TODO: There are other types of
+			// ssa.CallInstructions, but they have different
+			// control flow.
 			outs := outs[:0]
 			if out := instr.Call.StaticCallee(); out != nil {
 				outs = append(outs, out)
@@ -704,10 +767,71 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 		}
 	}
 
+	// Annoyingly, the last instruction in an ssa.BasicBlock
+	// doesn't have a location, even if it obviously corresponds
+	// to a source statement. exitPos guesses one.
+	exitPos := func(b *ssa.BasicBlock) token.Pos {
+		for b != nil {
+			for i := len(b.Instrs) - 1; i >= 0; i-- {
+				if pos := b.Instrs[i].Pos(); pos != 0 {
+					return pos
+				}
+			}
+			if len(b.Preds) == 0 {
+				break
+			}
+			b = b.Preds[0]
+		}
+		return 0
+	}
+
+	// If this is an "if", see if we have enough information to
+	// determine its direction.
+	succs := b.Succs
+	if ifCond != nil {
+		x := vs.Get(ifCond)
+		if x != nil {
+			log.Printf("determined control flow at %s: %v", s.fset.Position(exitPos(b)), x)
+			if constant.BoolVal(x.(DynConst).c) {
+				// Take true path.
+				succs = succs[:1]
+			} else {
+				// Take false path.
+				succs = succs[1:]
+			}
+		}
+	}
+
 	// Process block successors.
 	for _, succLockSet := range lockSets.M {
-		for _, b2 := range b.Succs {
-			s.walkBlock(f, b2, blockCache, succLockSet, exitLockSets)
+		for i, b2 := range succs {
+			vs2 := vs
+			if ifCond != nil {
+				// TODO: We could back-propagate this
+				// in simple cases, like when ifCond
+				// is a == BinOp. (And we could
+				// forward-propagate that! Hmm.)
+				vs2 = vs2.Extend(ifCond, DynConst{constant.MakeBool(i == 0)})
+			}
+
+			// Propagate values over phis at the beginning
+			// of b2.
+			for _, instr := range b2.Instrs {
+				instr, ok := instr.(*ssa.Phi)
+				if !ok {
+					break
+				}
+				for i, inval := range instr.Edges {
+					if b2.Preds[i] == b {
+						x := vs2.Get(inval)
+						if x != nil {
+							vs2 = vs2.Extend(instr, x)
+						}
+					}
+				}
+			}
+
+			s.walkBlock(f, b2, blockCache, vs2, succLockSet, exitLockSets)
 		}
 	}
 }

@@ -58,17 +58,7 @@ func (lo *LockOrder) Add(locked *LockSet, locking pointer.PointsToSet, stack *St
 	}
 }
 
-func (lo *LockOrder) WriteToDot(w io.Writer) {
-	fmt.Fprintf(w, "digraph locks {\n")
-	for edge := range lo.m {
-		fromName := lo.sp.s[edge.fromId]
-		toName := lo.sp.s[edge.toId]
-		fmt.Fprintf(w, "  %q -> %q;\n", fromName, toName)
-	}
-	fmt.Fprintf(w, "}\n")
-}
-
-func (lo *LockOrder) Check(w io.Writer, fset *token.FileSet) {
+func (lo *LockOrder) FindCycles() [][]int {
 	// Compute out-edge adjacency list.
 	out := map[int][]int{}
 	for edge := range lo.m {
@@ -113,6 +103,42 @@ func (lo *LockOrder) Check(w io.Writer, fset *token.FileSet) {
 	for root := range out {
 		dfs(root, root)
 	}
+
+	return cycles
+}
+
+func (lo *LockOrder) WriteToDot(w io.Writer) {
+	// Find cycles to highlight edges.
+	cycles := lo.FindCycles()
+	cycleEdges := map[lockOrderEdge]struct{}{}
+	var maxStack int
+	for _, cycle := range cycles {
+		for i, fromId := range cycle {
+			toId := cycle[(i+1)%len(cycle)]
+			edge := lockOrderEdge{fromId, toId}
+			cycleEdges[edge] = struct{}{}
+			if len(lo.m[edge]) > maxStack {
+				maxStack = len(lo.m[edge])
+			}
+		}
+	}
+
+	fmt.Fprintf(w, "digraph locks {\n")
+	for edge, stacks := range lo.m {
+		fromName := lo.sp.s[edge.fromId]
+		toName := lo.sp.s[edge.toId]
+		var props string
+		if _, ok := cycleEdges[edge]; ok {
+			width := 1 + 6*float64(len(stacks))/float64(maxStack)
+			props = fmt.Sprintf(" [label=%d,penwidth=%f,color=red]", len(stacks), width)
+		}
+		fmt.Fprintf(w, "  %q -> %q%s;\n", fromName, toName, props)
+	}
+	fmt.Fprintf(w, "}\n")
+}
+
+func (lo *LockOrder) Check(w io.Writer, fset *token.FileSet) {
+	cycles := lo.FindCycles()
 
 	// Report cycles.
 	printStack := func(stack []*ssa.Call, tail string) {

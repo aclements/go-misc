@@ -7,9 +7,11 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
-// livenessFor computes which values must be live at entry to each
-// basic block in f in order to compute each value in vals. deps is
-// indexed by basic block number in f.
+// livenessFor computes which values must be live in each basic block
+// in f in order to compute each value in vals. Note that a given
+// value may be may be marked live in the same block it's defined in,
+// so it may not yet exist upon entry to the block. deps is indexed by
+// basic block number in f.
 //
 // TODO: This doesn't account for control flow dependencies. For
 // example if a value depends on a phi, this will add all of the
@@ -25,15 +27,16 @@ func livenessFor(f *ssa.Function, vals []ssa.Instruction) (deps []map[ssa.Instru
 		if _, ok := deps[use.Index][def]; ok {
 			return
 		}
-		if def.Block() == use {
-			// We've reached the defining block.
-			return
-		}
 
 		if deps[use.Index] == nil {
 			deps[use.Index] = make(map[ssa.Instruction]struct{})
 		}
 		deps[use.Index][def] = struct{}{}
+
+		if def.Block() == use {
+			// We've reached the defining block.
+			return
+		}
 
 		if len(use.Preds) == 0 {
 			f.WriteTo(os.Stderr)

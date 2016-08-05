@@ -796,6 +796,12 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 	bck := blockCacheKey{b, enterLockSet.Key()}
 	if bck2s, ok := blockCache[bck]; ok {
 		for _, bck2 := range bck2s {
+			// Check the values that are live at this
+			// block. Note that the live set includes phis
+			// at the beginning of this block if they
+			// participate in control flow decisions, so
+			// we'll pick up any phi values assigned by
+			// our called.
 			if bck2.vs.EqualAt(vs, s.fns[f].ifDeps[b.Index]) {
 				// Terminate recursion. Some other
 				// path has already visited here with

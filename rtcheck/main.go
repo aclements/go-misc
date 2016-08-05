@@ -412,6 +412,22 @@ func rewriteRuntime(f *ast.File) {
 					Args: []ast.Expr{node.Args[0]},
 				}
 			}
+
+		case *ast.FuncDecl:
+			// TODO: Some functions are just too hairy for
+			// the analysis right now.
+			switch node.Name.Name {
+			case "throw":
+				node.Body = &ast.BlockStmt{
+					List: []ast.Stmt{
+						&ast.ForStmt{
+							Body: &ast.BlockStmt{},
+						},
+					},
+				}
+			case "traceEvent":
+				node.Body = nil
+			}
 		}
 		return node
 	}, f)
@@ -717,6 +733,27 @@ type state struct {
 	debugging bool
 }
 
+func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
+	if fn := call.Common().StaticCallee(); fn != nil {
+		return []*ssa.Function{fn}
+	} else if cnode := s.cg.Nodes[call.Parent()]; cnode != nil {
+		var callees []*ssa.Function
+		// TODO: Build an index in walkFunction?
+		for _, o := range cnode.Out {
+			if o.Site != call {
+				continue
+			}
+			callees = append(callees, o.Callee.Func)
+		}
+		return callees
+	}
+	// TODO: This happens for print and println, which we should
+	// turn into calls to their implementation functions.
+	log.Print("no call graph for ", call, " in ", call.Parent(), " at ", s.fset.Position(call.Pos()))
+	return nil
+
+}
+
 // walkFunction explores f, given locks held on entry to f. It returns
 // the set of locksets that can be held on exit from f.
 //
@@ -899,7 +936,6 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 	// instruction on all possible lock sets at that point.
 	lockSets := NewLockSetSet()
 	lockSets.Add(enterLockSet)
-	var outs [10]*ssa.Function
 	var ifCond ssa.Value
 	for _, instr := range b.Instrs {
 		// Update value state with the effect of this
@@ -916,36 +952,30 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 			// TODO: There are other types of
 			// ssa.CallInstructions, but they have different
 			// control flow.
-			outs := outs[:0]
-			if out := instr.Call.StaticCallee(); out != nil {
-				outs = append(outs, out)
-			} else if cnode := s.cg.Nodes[b.Parent()]; cnode != nil {
-				// TODO: Build an index in walkFunction?
-				for _, o := range cnode.Out {
-					if o.Site != instr {
-						continue
-					}
-					outs = append(outs, o.Callee.Func)
-				}
-			} else {
-				// TODO: This happens for print and
-				// println, which we should turn into
-				// calls to their implementation
-				// functions.
-				log.Print("no call graph for ", instr, " in ", b.Parent(), " at ", s.fset.Position(instr.Pos()))
+			outs := s.callees(instr)
+			if len(outs) == 0 {
+				// This is a built-in like print or
+				// len. Assume it doesn't affect the
+				// locksets.
+				break
 			}
-
 			nextLockSets := NewLockSetSet()
 			s.stack = s.stack.Extend(instr)
 			for _, o := range outs {
 				//fmt.Printf("%q -> %q;\n", f.String(), o.String())
-				// TODO: _Gscan locks, misc locks
+				// TODO: _Gscan locks, misc locks, semaphores
 				if o == lockFn {
 					lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
 					for _, ls := range lockSets.M {
 						s.lockOrder.Add(ls, lock, s.stack)
-						ls = ls.Plus(lock, s.stack)
-						nextLockSets.Add(ls)
+						ls2 := ls.Plus(lock, s.stack)
+						// If we
+						// self-deadlocked,
+						// terminate this
+						// path.
+						if ls != ls2 {
+							nextLockSets.Add(ls2)
+						}
 					}
 					//log.Print("call to runtime.lock: ", s.pta.Queries[instr.Call.Args[0]].PointsTo())
 				} else if o == unlockFn {
@@ -1026,8 +1056,7 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 		}
 	}
 	if len(lockSets.M) == 0 && debugTree != nil {
-		// XXX This should only happen on functions that can't
-		// return, but it's happening for gosweepone.
+		// This happens after functions that don't return.
 		debugTree.Leaf("no locksets")
 	}
 

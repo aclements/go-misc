@@ -110,11 +110,21 @@ func main() {
 		fns:  make(map[*ssa.Function]*funcInfo),
 
 		lockOrder: NewLockOrder(stringSpace),
+
+		roots:   nil,
+		rootSet: make(map[*ssa.Function]struct{}),
 	}
-	m := runtimePkg.Members["newobject"].(*ssa.Function)
-	// TODO: Warn if any locks are held at return.
-	exitLockSets := s.walkFunction(m, stringSpace.NewSet())
-	log.Print("locks at return: ", exitLockSets)
+	// TODO: Add roots from cmd/compile/internal/gc/builtin/runtime.go.
+	for _, name := range []string{"newobject"} {
+		m := runtimePkg.Members[name].(*ssa.Function)
+		s.addRoot(m)
+	}
+	for i := 0; i < len(s.roots); i++ {
+		// TODO: Warn if any locks are held at return.
+		root := s.roots[i]
+		exitLockSets := s.walkFunction(root, stringSpace.NewSet())
+		log.Print("locks at return: ", exitLockSets)
+	}
 
 	// Dump debug trees.
 	if s.debugTree != nil {
@@ -726,11 +736,24 @@ type state struct {
 
 	lockOrder *LockOrder
 
+	// roots is the list of root functions to visit.
+	roots   []*ssa.Function
+	rootSet map[*ssa.Function]struct{}
+
 	// debugTree, if non-nil is the function CFG debug tree.
 	debugTree *DebugTree
 	// debugging indicates that we're debugging this subgraph of
 	// the CFG.
 	debugging bool
+}
+
+// addRoot adds fn as a root of the control flow graph to visit.
+func (s *state) addRoot(fn *ssa.Function) {
+	if _, ok := s.rootSet[fn]; ok {
+		return
+	}
+	s.roots = append(s.roots, fn)
+	s.rootSet[fn] = struct{}{}
 }
 
 func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
@@ -995,6 +1018,12 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 			}
 			s.stack = s.stack.parent
 			lockSets = nextLockSets
+
+		case *ssa.Go:
+			for _, o := range s.callees(instr) {
+				log.Printf("found go %s; adding to roots", o)
+				s.addRoot(o)
+			}
 
 		case *ssa.Return:
 			// We've reached function exit. Add the

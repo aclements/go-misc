@@ -12,7 +12,7 @@ import (
 
 type LockOrder struct {
 	sp *StringSpace
-	m  map[lockOrderEdge]lockOrderInfo
+	m  map[lockOrderEdge]map[lockOrderInfo]struct{}
 }
 
 type lockOrderEdge struct {
@@ -20,11 +20,11 @@ type lockOrderEdge struct {
 }
 
 type lockOrderInfo struct {
-	fromStack, toStack *StackFrame
+	fromStack, toStack *StackFrame // Must be interned and common trimmed
 }
 
 func NewLockOrder(sp *StringSpace) *LockOrder {
-	return &LockOrder{sp, make(map[lockOrderEdge]lockOrderInfo)}
+	return &LockOrder{sp, make(map[lockOrderEdge]map[lockOrderInfo]struct{})}
 }
 
 func (lo *LockOrder) Add(locked *LockSet, locking pointer.PointsToSet, stack *StackFrame) {
@@ -33,14 +33,25 @@ func (lo *LockOrder) Add(locked *LockSet, locking pointer.PointsToSet, stack *St
 		if locked.bits.Bit(i) != 0 {
 			for j := 0; j < newls.bits.BitLen(); j++ {
 				if newls.bits.Bit(j) != 0 {
+					// Trim the common prefix of
+					// the two stacks, since we
+					// only care about how we got
+					// from locked to locking.
+					lockedStack := locked.stacks[i]
+					fromStack, toStack := lockedStack.TrimCommonPrefix(stack)
+
+					// Add info to edge.
 					edge := lockOrderEdge{i, j}
-					if _, ok := lo.m[edge]; ok {
-						continue
+					info := lockOrderInfo{
+						fromStack.Intern(),
+						toStack.Intern(),
 					}
-					lo.m[edge] = lockOrderInfo{
-						locked.stacks[i],
-						stack,
+					infos := lo.m[edge]
+					if infos == nil {
+						infos = make(map[lockOrderInfo]struct{})
+						lo.m[edge] = infos
 					}
+					infos[info] = struct{}{}
 				}
 			}
 		}
@@ -58,7 +69,7 @@ func (lo *LockOrder) WriteToDot(w io.Writer) {
 }
 
 func (lo *LockOrder) Check(w io.Writer, fset *token.FileSet) {
-	// Compute out-edge map.
+	// Compute out-edge adjacency list.
 	out := map[int][]int{}
 	for edge := range lo.m {
 		out[edge.fromId] = append(out[edge.fromId], edge.toId)
@@ -112,6 +123,15 @@ func (lo *LockOrder) Check(w io.Writer, fset *token.FileSet) {
 		}
 		fmt.Fprintf(w, "%*s%s at %s\n", indent, "", tail, fset.Position(stack[len(stack)-1].Pos()))
 	}
+	printInfo := func(tid int, edge lockOrderEdge, info lockOrderInfo) {
+		fromStack := info.fromStack.Flatten(nil)
+		toStack := info.toStack.Flatten(nil)
+
+		lastCommonFn := fromStack[0].Parent()
+		fmt.Fprintf(w, "    %s\n", lastCommonFn)
+		printStack(fromStack, fmt.Sprintf("acquires %s", lo.sp.s[edge.fromId]))
+		printStack(toStack, fmt.Sprintf("acquires %s", lo.sp.s[edge.toId]))
+	}
 	for _, cycle := range cycles {
 		cycle = append(cycle, cycle[0])
 		fmt.Fprintf(w, "lock cycle: ")
@@ -124,24 +144,13 @@ func (lo *LockOrder) Check(w io.Writer, fset *token.FileSet) {
 		fmt.Fprintf(w, "\n")
 
 		for i := 0; i < len(cycle)-1; i++ {
-			from, to := cycle[i], cycle[i+1]
-			info := lo.m[lockOrderEdge{from, to}]
+			edge := lockOrderEdge{cycle[i], cycle[i+1]}
+			infos := lo.m[edge]
 
-			fromStack := info.fromStack.Flatten()
-			toStack := info.toStack.Flatten()
-
-			var common int
-			for common < len(fromStack) && common < len(toStack) && fromStack[common] == toStack[common] {
-				common++
+			fmt.Fprintf(w, "  %d path(s) acquire %s then %s:\n", len(infos), lo.sp.s[edge.fromId], lo.sp.s[edge.toId])
+			for info, _ := range infos {
+				printInfo(i, edge, info)
 			}
-
-			lastCommonFn := fromStack[common].Parent()
-			fmt.Fprintf(w, "    thread %d acquires %s then %s:\n", i+1, lo.sp.s[from], lo.sp.s[to])
-
-			fmt.Fprintf(w, "    %s\n", lastCommonFn)
-			printStack(fromStack[common:], fmt.Sprintf("acquires %s", lo.sp.s[from]))
-			printStack(toStack[common:], fmt.Sprintf("acquires %s", lo.sp.s[to]))
-
 			fmt.Fprintf(w, "\n")
 		}
 	}

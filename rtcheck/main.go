@@ -621,11 +621,60 @@ type StackFrame struct {
 	call   *ssa.Call
 }
 
-func (sf *StackFrame) Flatten() []*ssa.Call {
+var internedStackFrames = make(map[StackFrame]*StackFrame)
+
+func (sf *StackFrame) Flatten(into []*ssa.Call) []*ssa.Call {
+	if sf == nil {
+		if into == nil {
+			return nil
+		}
+		return into[:0]
+	}
+	return append(sf.parent.Flatten(into), sf.call)
+}
+
+func (sf *StackFrame) Extend(call *ssa.Call) *StackFrame {
+	return &StackFrame{sf, call}
+}
+
+func (sf *StackFrame) Intern() *StackFrame {
 	if sf == nil {
 		return nil
 	}
-	return append(sf.parent.Flatten(), sf.call)
+	if sf, ok := internedStackFrames[*sf]; ok {
+		return sf
+	}
+	nsf := sf.parent.Intern().Extend(sf.call)
+	if nsf, ok := internedStackFrames[*nsf]; ok {
+		return nsf
+	}
+	internedStackFrames[*nsf] = nsf
+	return nsf
+}
+
+func (sf *StackFrame) TrimCommonPrefix(other *StackFrame) (*StackFrame, *StackFrame) {
+	var buf [64]*ssa.Call
+	f1 := sf.Flatten(buf[:])
+	f2 := other.Flatten(f1[len(f1):cap(f1)])
+
+	// Find the common prefix.
+	var common int
+	for common < len(f1) && common < len(f2) && f1[common] == f2[common] {
+		common++
+	}
+
+	// Reconstitute.
+	if common == 0 {
+		return sf, other
+	}
+	var nsf1, nsf2 *StackFrame
+	for _, call := range f1[common:] {
+		nsf1 = nsf1.Extend(call)
+	}
+	for _, call := range f2[common:] {
+		nsf2 = nsf2.Extend(call)
+	}
+	return nsf1, nsf2
 }
 
 type state struct {
@@ -806,7 +855,7 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 			}
 
 			nextLockSets := NewLockSetSet()
-			s.stack = &StackFrame{s.stack, instr}
+			s.stack = s.stack.Extend(instr)
 			for _, o := range outs {
 				//fmt.Printf("%q -> %q;\n", f.String(), o.String())
 				// TODO: _Gscan locks, misc locks

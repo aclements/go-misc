@@ -23,6 +23,13 @@ import (
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
+// debugFunctions is a set of functions to enable extra debugging
+// tracing for. Each function in debugFunctions will generate a dot
+// file containing the block exploration graph of that function.
+var debugFunctions = map[string]bool{
+	"runtime.gcStart": true,
+}
+
 func main() {
 	var conf loader.Config
 
@@ -120,6 +127,21 @@ func main() {
 	// TODO: Warn if any locks are held at return.
 	exitLockSets := s.walkFunction(m, stringSpace.NewSet())
 	log.Print("locks at return: ", exitLockSets)
+
+	// Dump function debug trees.
+	for fn, fInfo := range s.fns {
+		if fInfo.debugTree == nil {
+			continue
+		}
+		func() {
+			f, err := os.Create(fmt.Sprintf("debug-%s.dot", fn))
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer f.Close()
+			fInfo.debugTree.WriteToDot(f)
+		}()
+	}
 
 	//s.lockOrder.WriteToDot(os.Stdout)
 	s.lockOrder.Check(os.Stdout, fset)
@@ -614,6 +636,10 @@ type funcInfo struct {
 	// at entry to each block that may affect future control flow
 	// decisions.
 	ifDeps []map[ssa.Instruction]struct{}
+
+	// debugTree is the block trace debug tree for this function.
+	// If nil, this function is not being debug traced.
+	debugTree *DebugTree
 }
 
 type StackFrame struct {
@@ -742,6 +768,10 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 		if f.Blocks == nil {
 			log.Println("warning: external function", f.Name())
 		}
+
+		if debugFunctions[f.String()] {
+			fInfo.debugTree = new(DebugTree)
+		}
 	}
 
 	if f.Blocks == nil {
@@ -763,6 +793,11 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	locksKey := locks.Key()
 	if memo, ok := fInfo.exitLockSets[locksKey]; ok {
 		return memo
+	}
+
+	if fInfo.debugTree != nil {
+		fInfo.debugTree.Pushf("enter lockset %v", locks)
+		defer fInfo.debugTree.Pop()
 	}
 
 	// Resolve function cycles by returning an empty set of
@@ -793,6 +828,15 @@ type blockCacheKey2 struct {
 }
 
 func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blockCacheKey][]blockCacheKey2, vs *ValState, enterLockSet *LockSet, exitLockSets *LockSetSet) {
+	debugTree := s.fns[f].debugTree
+	if debugTree != nil {
+		var buf bytes.Buffer
+		fmt.Fprintf(&buf, "block %v\nlockset %v\nvalue state:\n", b.Index, enterLockSet)
+		vs.WriteTo(&buf)
+		debugTree.Push(buf.String())
+		defer debugTree.Pop()
+	}
+
 	bck := blockCacheKey{b, enterLockSet.Key()}
 	if bck2s, ok := blockCache[bck]; ok {
 		for _, bck2 := range bck2s {
@@ -806,6 +850,9 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 				// Terminate recursion. Some other
 				// path has already visited here with
 				// this lock set and value state.
+				if debugTree != nil {
+					debugTree.Leaf("cached")
+				}
 				return
 			}
 		}
@@ -815,6 +862,9 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 			// 	log.Print("next ", f.Name(), ":", b.Index)
 			// 	bck2.vs.WriteTo(os.Stderr)
 			// }
+			if debugTree != nil {
+				debugTree.Leaf("too many states")
+			}
 			return
 		}
 	}
@@ -950,6 +1000,11 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 			}
 		}
 	}
+	if len(lockSets.M) == 0 && debugTree != nil {
+		// XXX This should only happen on functions that can't
+		// return, but it's happening for gosweepone.
+		debugTree.Leaf("no locksets")
+	}
 
 	// Process block successors.
 	for _, succLockSet := range lockSets.M {
@@ -980,6 +1035,13 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 				}
 			}
 
+			if debugTree != nil && len(b.Succs) > 1 {
+				if b2 == b.Succs[0] {
+					debugTree.SetEdge("T")
+				} else if b2 == b.Succs[1] {
+					debugTree.SetEdge("F")
+				}
+			}
 			s.walkBlock(f, b2, blockCache, vs2, succLockSet, exitLockSets)
 		}
 	}

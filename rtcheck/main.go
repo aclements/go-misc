@@ -67,11 +67,11 @@ func main() {
 	prog.Build()
 	runtimePkg := prog.ImportedPackage("runtime")
 
-	// XXX Generate a synthetic "main" function that calls all of
-	// the runtime entry points and exported functions. See
-	// cmd/compile/internal/gc/builtin/runtime.go.
-
-	// XXX Teach it that you can jump to sigprof at any point?
+	// TODO: Teach it that you can jump to sigprof at any point?
+	//
+	// TODO: Teach it about implicit write barriers?
+	//
+	// TODO: Teach it about morestack at every function entry?
 
 	// Prepare for pointer analysis.
 	ptrConfig := pointer.Config{
@@ -90,10 +90,6 @@ func main() {
 	}
 	cg := pta.CallGraph
 
-	// XXX We don't want the callgraph so much as the
-	// inter-procedural flow graph. But the callgraph edges
-	// indicate the ssa.CallInstruction, so we can use it.
-
 	cg.DeleteSyntheticNodes() // ?
 	// fmt.Println("digraph x {")
 	// callgraph.GraphVisitEdges(pta.CallGraph, func(e *callgraph.Edge) error {
@@ -109,12 +105,16 @@ func main() {
 		pta:  pta,
 		fns:  make(map[*ssa.Function]*funcInfo),
 
-		lockOrder: NewLockOrder(stringSpace),
+		lockOrder: NewLockOrder(fset),
 
 		roots:   nil,
 		rootSet: make(map[*ssa.Function]struct{}),
 	}
-	// TODO: Add roots from cmd/compile/internal/gc/builtin/runtime.go.
+	// TODO: Add roots from
+	// cmd/compile/internal/gc/builtin/runtime.go. Will need to
+	// add them as roots for PTA too. Maybe just synthesize a main
+	// function that calls all of them and use that as the root
+	// here.
 	for _, name := range []string{"newobject"} {
 		m := runtimePkg.Members[name].(*ssa.Function)
 		s.addRoot(m)
@@ -122,7 +122,7 @@ func main() {
 	for i := 0; i < len(s.roots); i++ {
 		// TODO: Warn if any locks are held at return.
 		root := s.roots[i]
-		exitLockSets := s.walkFunction(root, stringSpace.NewSet())
+		exitLockSets := s.walkFunction(root, NewLockSet(stringSpace))
 		log.Print("locks at return: ", exitLockSets)
 	}
 
@@ -152,16 +152,7 @@ func main() {
 	}
 
 	//s.lockOrder.WriteToDot(os.Stdout)
-	s.lockOrder.Check(os.Stdout, fset)
-
-	// fmt.Println("digraph x {")
-	// for _, b := range m.Blocks {
-	// 	fmt.Printf("%q;\n", fset.Position(b.Instrs[0].Pos()))
-	// 	for _, s := range b.Succs {
-	// 		fmt.Printf("%q -> %q;\n", fset.Position(b.Instrs[0].Pos()), fset.Position(s.Instrs[0].Pos()))
-	// 	}
-	// }
-	// fmt.Println("}")
+	s.lockOrder.Check(os.Stdout)
 }
 
 // rewriteSources rewrites all of the Go files in pkg to eliminate
@@ -190,11 +181,7 @@ func rewriteSources(pkg *build.Package, rewritten map[string][]byte) {
 		}
 
 		if pkg.Name == "runtime" && fname == "stubs.go" {
-			// Add declarations and calls to runtime entry-points.
-			//
-			// TODO: Maybe put in where the original
-			// declaration is so we don't mess up line
-			// numbers.
+			// Add calls to runtime roots for PTA.
 			buf.Write([]byte(`
 var _ = newobject(nil)
 `))
@@ -469,19 +456,19 @@ func registerLockQueries(pkg *ssa.Package, ptrConfig *pointer.Config) {
 	}
 }
 
-// TODO: As an experiment, implement lock-set checking. Track down the
-// value passed to lock/unlock to a types.Var or types.Object or
-// something. Can I use points-to analysis for that?
-
+// StringSpace interns strings into small integers.
 type StringSpace struct {
 	m map[string]int
 	s []string
 }
 
+// NewStringSpace returns a new, empty StringSpace.
 func NewStringSpace() *StringSpace {
 	return &StringSpace{m: make(map[string]int)}
 }
 
+// Intern turns str into a small integer where Intern(x) == Intern(y)
+// iff x == y.
 func (sp *StringSpace) Intern(str string) int {
 	if id, ok := sp.m[str]; ok {
 		return id
@@ -492,10 +479,7 @@ func (sp *StringSpace) Intern(str string) int {
 	return id
 }
 
-func (sp *StringSpace) NewSet() *LockSet {
-	return &LockSet{sp: sp}
-}
-
+// LockSet represents a set of locks and where they were acquired.
 type LockSet struct {
 	sp     *StringSpace
 	bits   big.Int
@@ -503,6 +487,10 @@ type LockSet struct {
 }
 
 type LockSetKey string
+
+func NewLockSet(sp *StringSpace) *LockSet {
+	return &LockSet{sp: sp}
+}
 
 func (set *LockSet) clone() *LockSet {
 	out := &LockSet{sp: set.sp, stacks: map[int]*StackFrame{}}
@@ -513,6 +501,8 @@ func (set *LockSet) clone() *LockSet {
 	return out
 }
 
+// Key returns a string such that two LockSet's Keys are == iff both
+// LockSets have the same locks acquired at the same stacks.
 func (set *LockSet) Key() LockSetKey {
 	// TODO: This is complex enough now that maybe I just want a
 	// hash function and an equality function.
@@ -528,6 +518,9 @@ func (set *LockSet) Key() LockSetKey {
 	return LockSetKey(k)
 }
 
+// Plus returns a LockSet that extends set with all locks in s,
+// acquired at stack. If a lock in s is already in set, it does not
+// get re-added. If all locks in s are in set, it returns set.
 func (set *LockSet) Plus(s pointer.PointsToSet, stack *StackFrame) *LockSet {
 	// TODO: Using the label strings is a hack. Internally, the
 	// pointer package already represents PointsToSet as a sparse
@@ -547,6 +540,8 @@ func (set *LockSet) Plus(s pointer.PointsToSet, stack *StackFrame) *LockSet {
 	return out
 }
 
+// Union returns a LockSet that is the union of set and o. If both set
+// and o contain the same lock, the stack from set is preferred.
 func (set *LockSet) Union(o *LockSet) *LockSet {
 	var new big.Int
 	new.AndNot(&o.bits, &set.bits)
@@ -565,6 +560,8 @@ func (set *LockSet) Union(o *LockSet) *LockSet {
 	return out
 }
 
+// Minus returns a LockSet that is like set, but does not contain any
+// of the locks in s.
 func (set *LockSet) Minus(s pointer.PointsToSet) *LockSet {
 	out := set
 	for _, label := range s.Labels() {
@@ -581,6 +578,7 @@ func (set *LockSet) Minus(s pointer.PointsToSet) *LockSet {
 	return out
 }
 
+// MinusLabel is like Minus, but for a specific string lock label.
 func (set *LockSet) MinusLabel(label string) *LockSet {
 	id := set.sp.Intern(label)
 	if set.bits.Bit(id) == 0 {
@@ -607,6 +605,7 @@ func (set *LockSet) String() string {
 	return string(append(b, '}'))
 }
 
+// A LockSetSet is a set of LockSets.
 type LockSetSet struct {
 	M map[LockSetKey]*LockSet
 }
@@ -650,6 +649,7 @@ func (lss *LockSetSet) String() string {
 	return string(append(b, '}'))
 }
 
+// funcInfo contains analysis state for a single function.
 type funcInfo struct {
 	// exitLockSets maps from entry lock set to set of exit lock
 	// sets. It memoizes the result of walkFunction.
@@ -666,6 +666,8 @@ type funcInfo struct {
 	debugTree *DebugTree
 }
 
+// StackFrame is a stack of call sites. A nil *StackFrame represents
+// an empty stack.
 type StackFrame struct {
 	parent *StackFrame
 	call   *ssa.Call
@@ -673,6 +675,8 @@ type StackFrame struct {
 
 var internedStackFrames = make(map[StackFrame]*StackFrame)
 
+// Flatten turns sf into a list of calls where the outer-most call is
+// first.
 func (sf *StackFrame) Flatten(into []*ssa.Call) []*ssa.Call {
 	if sf == nil {
 		if into == nil {
@@ -683,10 +687,13 @@ func (sf *StackFrame) Flatten(into []*ssa.Call) []*ssa.Call {
 	return append(sf.parent.Flatten(into), sf.call)
 }
 
+// Extend returns a new StackFrame that extends sf with call.
 func (sf *StackFrame) Extend(call *ssa.Call) *StackFrame {
 	return &StackFrame{sf, call}
 }
 
+// Intern returns a canonical *StackFrame such that a.Intern() ==
+// b.Intern() iff a and b have the same sequence of calls.
 func (sf *StackFrame) Intern() *StackFrame {
 	if sf == nil {
 		return nil
@@ -702,6 +709,8 @@ func (sf *StackFrame) Intern() *StackFrame {
 	return nsf
 }
 
+// TrimCommonPrefix eliminates the outermost frames that sf and other
+// have in common and returns their distinct suffixes.
 func (sf *StackFrame) TrimCommonPrefix(other *StackFrame) (*StackFrame, *StackFrame) {
 	var buf [64]*ssa.Call
 	f1 := sf.Flatten(buf[:])
@@ -756,6 +765,9 @@ func (s *state) addRoot(fn *ssa.Function) {
 	s.rootSet[fn] = struct{}{}
 }
 
+// callees returns the set of functions that call could possibly
+// invoke. It returns nil for built-in functions or if pointer
+// analysis failed.
 func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
 	if fn := call.Common().StaticCallee(); fn != nil {
 		return []*ssa.Function{fn}
@@ -783,9 +795,6 @@ func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
 // This implements the lockset algorithm from Engler and Ashcroft,
 // SOSP 2003, plus simple path sensitivity to reduce mistakes from
 // correlated control flow.
-//
-// TODO: Does this also have to return all locks acquired, even those
-// that are released by the time f returns?
 //
 // TODO: A lot of call trees simply don't take locks. We could record
 // that fact and fast-path the entry locks to the exit locks.
@@ -892,9 +901,9 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	// set we should report a self-deadlock.
 	fInfo.exitLockSets[locksKey] = nil
 
-	blockCache := make(map[blockCacheKey][]blockCacheKey2)
+	blockCache := make(blockCache)
 	exitLockSets := NewLockSetSet()
-	s.walkBlock(f, f.Blocks[0], blockCache, nil, locks, exitLockSets)
+	s.walkBlock(f.Blocks[0], blockCache, nil, locks, exitLockSets)
 	fInfo.exitLockSets[locksKey] = exitLockSets
 	log.Printf("%s: %s -> %s", f.Name(), locks, exitLockSets)
 	if s.debugging {
@@ -903,16 +912,30 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	return exitLockSets
 }
 
+// A blockCache is the set of visited states within a function. If
+// walkBlock returns to the same block with the same state, it can
+// terminate that path of execution.
+type blockCache map[blockCacheKey][]blockCacheKey2
+
+// blockCacheKey is the hashable part of the block cache key. This is
+// used to quickly narrow down to a small set of blockCacheKey2 values
+// that must be directly compared for equality.
 type blockCacheKey struct {
 	block   *ssa.BasicBlock
 	lockset LockSetKey
 }
 
+// blockCacheKey2 is the un-hashable part of the block cache key.
 type blockCacheKey2 struct {
 	vs *ValState
 }
 
-func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blockCacheKey][]blockCacheKey2, vs *ValState, enterLockSet *LockSet, exitLockSets *LockSetSet) {
+// walkBlock visits b and all blocks reachable from b. The value state
+// and lock set upon entry to b are vs and enterLockSet, respectively.
+// When walkBlock reaches the return point of the function, it adds
+// the possible lock sets at that point to exitLockSets.
+func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState, enterLockSet *LockSet, exitLockSets *LockSetSet) {
+	f := b.Parent()
 	debugTree := s.fns[f].debugTree
 	if debugTree != nil {
 		var buf bytes.Buffer
@@ -985,7 +1008,6 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 			nextLockSets := NewLockSetSet()
 			s.stack = s.stack.Extend(instr)
 			for _, o := range outs {
-				//fmt.Printf("%q -> %q;\n", f.String(), o.String())
 				// TODO: _Gscan locks, misc locks, semaphores
 				if o == lockFn {
 					lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
@@ -1000,7 +1022,6 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 							nextLockSets.Add(ls2)
 						}
 					}
-					//log.Print("call to runtime.lock: ", s.pta.Queries[instr.Call.Args[0]].PointsTo())
 				} else if o == unlockFn {
 					lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
 					for _, ls := range lockSets.M {
@@ -1125,7 +1146,7 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 					debugTree.SetEdge("F")
 				}
 			}
-			s.walkBlock(f, b2, blockCache, vs2, succLockSet, exitLockSets)
+			s.walkBlock(b2, blockCache, vs2, succLockSet, exitLockSets)
 		}
 	}
 }

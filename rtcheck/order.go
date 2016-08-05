@@ -10,9 +10,12 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
+// LockOrder tracks a lock graph and reports cycles that prevent the
+// graph from being a partial order.
 type LockOrder struct {
-	sp *StringSpace
-	m  map[lockOrderEdge]map[lockOrderInfo]struct{}
+	sp   *StringSpace
+	fset *token.FileSet
+	m    map[lockOrderEdge]map[lockOrderInfo]struct{}
 }
 
 type lockOrderEdge struct {
@@ -23,12 +26,27 @@ type lockOrderInfo struct {
 	fromStack, toStack *StackFrame // Must be interned and common trimmed
 }
 
-func NewLockOrder(sp *StringSpace) *LockOrder {
-	return &LockOrder{sp, make(map[lockOrderEdge]map[lockOrderInfo]struct{})}
+// NewLockOrder returns an empty lock graph. Source locations in
+// reports will be resolved using fset.
+func NewLockOrder(fset *token.FileSet) *LockOrder {
+	return &LockOrder{
+		sp:   nil,
+		fset: fset,
+		m:    make(map[lockOrderEdge]map[lockOrderInfo]struct{}),
+	}
 }
 
+// Add adds lock edges to the lock order, given that the locks in
+// locked are currently held and the locks in locking are being
+// acquired at stack.
 func (lo *LockOrder) Add(locked *LockSet, locking pointer.PointsToSet, stack *StackFrame) {
-	newls := lo.sp.NewSet().Plus(locking, stack) // TODO: Unnecessary
+	if lo.sp == nil {
+		lo.sp = locked.sp
+	} else if lo.sp != locked.sp {
+		panic("locks come from a different StringSpace")
+	}
+
+	newls := NewLockSet(lo.sp).Plus(locking, stack) // TODO: Unnecessary
 	for i := 0; i < locked.bits.BitLen(); i++ {
 		if locked.bits.Bit(i) != 0 {
 			for j := 0; j < newls.bits.BitLen(); j++ {
@@ -58,6 +76,9 @@ func (lo *LockOrder) Add(locked *LockSet, locking pointer.PointsToSet, stack *St
 	}
 }
 
+// FindCycles returns a list of cycles in the lock order. Each cycle
+// is a list of lock IDs from the StringSpace in cycle order (without
+// any repetition).
 func (lo *LockOrder) FindCycles() [][]int {
 	// Compute out-edge adjacency list.
 	out := map[int][]int{}
@@ -107,6 +128,8 @@ func (lo *LockOrder) FindCycles() [][]int {
 	return cycles
 }
 
+// WriteToDot writes the lock graph in the dot language to w, with
+// cycles highlighted.
 func (lo *LockOrder) WriteToDot(w io.Writer) {
 	// Find cycles to highlight edges.
 	cycles := lo.FindCycles()
@@ -137,8 +160,10 @@ func (lo *LockOrder) WriteToDot(w io.Writer) {
 	fmt.Fprintf(w, "}\n")
 }
 
-func (lo *LockOrder) Check(w io.Writer, fset *token.FileSet) {
+// Check writes a text report of lock cycles to w.
+func (lo *LockOrder) Check(w io.Writer) {
 	cycles := lo.FindCycles()
+	fset := lo.fset
 
 	// Report cycles.
 	printStack := func(stack []*ssa.Call, tail string) {

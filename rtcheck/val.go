@@ -19,6 +19,10 @@ type ValState struct {
 	val  DynValue
 }
 
+// Get returns the dynamic value of val, or nil if unknown. val may be
+// a pure ssa.Value (not an ssa.Instruction), in which case it will be
+// resolved directly to a DynValue if possible. Otherwise, Get will
+// look up the value bound to val by a previous call to Extend.
 func (vs *ValState) Get(val ssa.Value) DynValue {
 	switch val := val.(type) {
 	case *ssa.Const:
@@ -46,18 +50,23 @@ func (vs *ValState) Get(val ssa.Value) DynValue {
 	return nil
 }
 
-func (vs *ValState) Extend(bind ssa.Value, val DynValue) *ValState {
-	if _, ok := val.(dynUnknown); ok {
+// Extend returns a new ValState that is like vs, but with bind bound
+// to dynamic value val. Extend is a no-op if called with a pure
+// ssa.Value.
+func (vs *ValState) Extend(val ssa.Value, dyn DynValue) *ValState {
+	if _, ok := dyn.(dynUnknown); ok {
 		return vs
 	}
 	// We only care about binding instruction values.
-	instr, ok := bind.(ssa.Instruction)
+	instr, ok := val.(ssa.Instruction)
 	if !ok {
 		return vs
 	}
-	return &ValState{vs, instr, val}
+	return &ValState{vs, instr, dyn}
 }
 
+// Do applies the effect of instr to the value state and returns an
+// Extended ValState.
 func (vs *ValState) Do(instr ssa.Instruction) *ValState {
 	switch instr := instr.(type) {
 	case *ssa.BinOp:
@@ -80,6 +89,8 @@ func (vs *ValState) Do(instr ssa.Instruction) *ValState {
 	return vs
 }
 
+// EqualAt returns true if vs and o have equal dynamic values for each
+// value in at.
 func (vs *ValState) EqualAt(o *ValState, at map[ssa.Instruction]struct{}) bool {
 	if len(at) == 0 {
 		// Fast path for empty at set.
@@ -110,6 +121,7 @@ func (vs *ValState) EqualAt(o *ValState, at map[ssa.Instruction]struct{}) bool {
 	return true
 }
 
+// WriteTo writes a debug representation of vs to w.
 func (vs *ValState) WriteTo(w io.Writer) {
 	shown := map[ssa.Instruction]struct{}{}
 	for ; vs != nil; vs = vs.parent {

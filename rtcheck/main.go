@@ -116,7 +116,17 @@ func main() {
 	exitLockSets := s.walkFunction(m, stringSpace.NewSet())
 	log.Print("locks at return: ", exitLockSets)
 
-	// Dump function debug trees.
+	// Dump debug trees.
+	if s.debugTree != nil {
+		func() {
+			f, err := os.Create("debug-functions.dot")
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer f.Close()
+			s.debugTree.WriteToDot(f)
+		}()
+	}
 	for fn, fInfo := range s.fns {
 		if fInfo.debugTree == nil {
 			continue
@@ -699,6 +709,12 @@ type state struct {
 	stack *StackFrame
 
 	lockOrder *LockOrder
+
+	// debugTree, if non-nil is the function CFG debug tree.
+	debugTree *DebugTree
+	// debugging indicates that we're debugging this subgraph of
+	// the CFG.
+	debugging bool
 }
 
 // walkFunction explores f, given locks held on entry to f. It returns
@@ -770,6 +786,20 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 		return lss1
 	}
 
+	if debugFunctions[f.String()] && s.debugging == false {
+		// Turn on debugging of this subtree.
+		if s.debugTree == nil {
+			s.debugTree = new(DebugTree)
+		}
+		s.debugging = true
+		defer func() { s.debugging = false }()
+	}
+
+	if s.debugging {
+		s.debugTree.Pushf("%s\nenter: %v", f, locks)
+		defer s.debugTree.Pop()
+	}
+
 	// Check memoization cache.
 	//
 	// TODO: Our lockset can differ from a cached lockset by only
@@ -781,6 +811,9 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	// and caching that.
 	locksKey := locks.Key()
 	if memo, ok := fInfo.exitLockSets[locksKey]; ok {
+		if s.debugging {
+			s.debugTree.Appendf("\ncached: %v", memo)
+		}
 		return memo
 	}
 
@@ -804,6 +837,9 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	s.walkBlock(f, f.Blocks[0], blockCache, nil, locks, exitLockSets)
 	fInfo.exitLockSets[locksKey] = exitLockSets
 	log.Printf("%s: %s -> %s", f.Name(), locks, exitLockSets)
+	if s.debugging {
+		s.debugTree.Appendf("\nexit: %v", exitLockSets)
+	}
 	return exitLockSets
 }
 

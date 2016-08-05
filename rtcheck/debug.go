@@ -37,6 +37,14 @@ func (t *DebugTree) Pushf(format string, args ...interface{}) {
 	t.Push(fmt.Sprintf(format, args...))
 }
 
+func (t *DebugTree) Append(label string) {
+	t.cur.label += label
+}
+
+func (t *DebugTree) Appendf(format string, args ...interface{}) {
+	t.Append(fmt.Sprintf(format, args...))
+}
+
 func (t *DebugTree) Pop() {
 	if t.cur == nil {
 		panic("unbalanced Push/Pop")

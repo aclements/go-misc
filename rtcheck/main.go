@@ -9,7 +9,6 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
-	"io"
 	"log"
 	"math/big"
 	"os"
@@ -96,9 +95,16 @@ func main() {
 	// })
 	// fmt.Println("}")
 
-	{
-		m := runtimePkg.Members["persistentalloc1"].(*ssa.Function)
+	if false {
+		m := runtimePkg.Members["mcommoninit"].(*ssa.Function)
 		m.WriteTo(os.Stderr)
+
+		for k, v := range pta.Queries {
+			if k.Parent() == nil {
+				continue
+			}
+			fmt.Fprintln(os.Stderr, k.Parent().Name(), k.Name(), v.PointsTo())
+		}
 	}
 
 	stringSpace := NewStringSpace()
@@ -115,7 +121,8 @@ func main() {
 	exitLockSets := s.walkFunction(m, stringSpace.NewSet())
 	log.Print("locks at return: ", exitLockSets)
 
-	s.lockOrder.WriteToDot(os.Stdout)
+	//s.lockOrder.WriteToDot(os.Stdout)
+	s.lockOrder.Check(os.Stdout, fset)
 
 	// fmt.Println("digraph x {")
 	// for _, b := range m.Blocks {
@@ -444,59 +451,86 @@ func (sp *StringSpace) NewSet() *LockSet {
 }
 
 type LockSet struct {
-	sp   *StringSpace
-	bits big.Int
+	sp     *StringSpace
+	bits   big.Int
+	stacks map[int]*StackFrame
 }
 
 type LockSetKey string
 
-func (set *LockSet) Key() LockSetKey {
-	return LockSetKey(set.bits.Text(16))
+func (set *LockSet) clone() *LockSet {
+	out := &LockSet{sp: set.sp, stacks: map[int]*StackFrame{}}
+	out.bits.Set(&set.bits)
+	for k, v := range set.stacks {
+		out.stacks[k] = v
+	}
+	return out
 }
 
-func (set *LockSet) Plus(s pointer.PointsToSet) *LockSet {
+func (set *LockSet) Key() LockSetKey {
+	// TODO: This is complex enough now that maybe I just want a
+	// hash function and an equality function.
+	k := set.bits.Text(16)
+	for i := 0; i < set.bits.BitLen(); i++ {
+		if set.bits.Bit(i) != 0 {
+			k += ":"
+			for sf := set.stacks[i]; sf != nil; sf = sf.parent {
+				k += fmt.Sprintf("%v,", sf.call.Pos())
+			}
+		}
+	}
+	return LockSetKey(k)
+}
+
+func (set *LockSet) Plus(s pointer.PointsToSet, stack *StackFrame) *LockSet {
 	// TODO: Using the label strings is a hack. Internally, the
 	// pointer package already represents PointsToSet as a sparse
 	// integer set, but that isn't exposed. :(
-	var out *LockSet
+	out := set
 	for _, label := range s.Labels() {
-		id := set.sp.Intern(label.String())
-		if out == nil {
-			if set.bits.Bit(id) == 0 {
-				out = &LockSet{sp: set.sp}
-				out.bits.SetBit(&set.bits, id, 1)
-			}
-		} else {
-			out.bits.SetBit(&out.bits, id, 1)
+		id := out.sp.Intern(label.String())
+		if out.bits.Bit(id) != 0 {
+			continue
 		}
-	}
-	if out == nil {
-		return set
+		if out == set {
+			out = out.clone()
+		}
+		out.bits.SetBit(&out.bits, id, 1)
+		out.stacks[id] = stack
 	}
 	return out
 }
 
 func (set *LockSet) Union(o *LockSet) *LockSet {
-	out := set.sp.NewSet()
-	out.bits.Or(&set.bits, &o.bits)
+	var new big.Int
+	new.AndNot(&o.bits, &set.bits)
+	if new.Sign() == 0 {
+		// Nothing to add.
+		return set
+	}
+
+	out := set.clone()
+	out.bits.Or(&out.bits, &o.bits)
+	for k, v := range o.stacks {
+		if out.stacks[k] == nil {
+			out.stacks[k] = v
+		}
+	}
 	return out
 }
 
 func (set *LockSet) Minus(s pointer.PointsToSet) *LockSet {
-	var out *LockSet
+	out := set
 	for _, label := range s.Labels() {
-		id := set.sp.Intern(label.String())
-		if out == nil {
-			if set.bits.Bit(id) != 0 {
-				out = &LockSet{sp: set.sp}
-				out.bits.SetBit(&set.bits, id, 0)
-			}
-		} else {
-			out.bits.SetBit(&out.bits, id, 0)
+		id := out.sp.Intern(label.String())
+		if out.bits.Bit(id) == 0 {
+			continue
 		}
-	}
-	if out == nil {
-		return set
+		if out == set {
+			out = out.clone()
+		}
+		out.bits.SetBit(&out.bits, id, 0)
+		delete(out.stacks, id)
 	}
 	return out
 }
@@ -506,8 +540,9 @@ func (set *LockSet) MinusLabel(label string) *LockSet {
 	if set.bits.Bit(id) == 0 {
 		return set
 	}
-	out := set.sp.NewSet()
-	out.bits.SetBit(&set.bits, id, 0)
+	out := set.clone()
+	out.bits.SetBit(&out.bits, id, 0)
+	delete(out.stacks, id)
 	return out
 }
 
@@ -569,44 +604,6 @@ func (lss *LockSetSet) String() string {
 	return string(append(b, '}'))
 }
 
-type LockOrder struct {
-	sp *StringSpace
-	m  map[int]*LockSet
-}
-
-func NewLockOrder(sp *StringSpace) *LockOrder {
-	return &LockOrder{sp, make(map[int]*LockSet)}
-}
-
-func (lo *LockOrder) Add(held *LockSet, acquiring pointer.PointsToSet) {
-	als := lo.sp.NewSet().Plus(acquiring)
-	for i := 0; i < held.bits.BitLen(); i++ {
-		if held.bits.Bit(i) != 0 {
-			targets := lo.m[i]
-			if targets == nil {
-				targets = als
-			} else {
-				targets = targets.Union(als)
-			}
-			lo.m[i] = targets
-		}
-	}
-}
-
-func (lo *LockOrder) WriteToDot(w io.Writer) {
-	fmt.Fprintf(w, "digraph locks {\n")
-	for from, to := range lo.m {
-		fromName := lo.sp.s[from]
-		for i := 0; i < to.bits.BitLen(); i++ {
-			if to.bits.Bit(i) != 0 {
-				toName := lo.sp.s[i]
-				fmt.Fprintf(w, "  %q -> %q;\n", fromName, toName)
-			}
-		}
-	}
-	fmt.Fprintf(w, "}\n")
-}
-
 type funcInfo struct {
 	// exitLockSets maps from entry lock set to set of exit lock
 	// sets. It memoizes the result of walkFunction.
@@ -619,12 +616,24 @@ type funcInfo struct {
 	ifDeps []map[ssa.Instruction]struct{}
 }
 
+type StackFrame struct {
+	parent *StackFrame
+	call   *ssa.Call
+}
+
+func (sf *StackFrame) Flatten() []*ssa.Call {
+	if sf == nil {
+		return nil
+	}
+	return append(sf.parent.Flatten(), sf.call)
+}
+
 type state struct {
 	fset  *token.FileSet
 	cg    *callgraph.Graph
 	pta   *pointer.Result
 	fns   map[*ssa.Function]*funcInfo
-	stack []*ssa.Function
+	stack *StackFrame
 
 	lockOrder *LockOrder
 }
@@ -694,6 +703,14 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	}
 
 	// Check memoization cache.
+	//
+	// TODO: Our lockset can differ from a cached lockset by only
+	// the stacks of the locks. Can we do something smarter than
+	// recomputing the entire sub-graph in that situation? It's
+	// rather complex because we may alter the lock order graph
+	// with new stacks in the process. One could imagine tracking
+	// a "predicate" and a compressed "delta" for the computation
+	// and caching that.
 	locksKey := locks.Key()
 	if memo, ok := fInfo.exitLockSets[locksKey]; ok {
 		return memo
@@ -708,9 +725,6 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	// lock set, maybe if we have a cycle with a non-empty lock
 	// set we should report a self-deadlock.
 	fInfo.exitLockSets[locksKey] = nil
-
-	s.stack = append(s.stack, f)
-	defer func() { s.stack = s.stack[:len(s.stack)-1] }()
 
 	blockCache := make(map[blockCacheKey][]blockCacheKey2)
 	exitLockSets := NewLockSetSet()
@@ -792,14 +806,15 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 			}
 
 			nextLockSets := NewLockSetSet()
+			s.stack = &StackFrame{s.stack, instr}
 			for _, o := range outs {
 				//fmt.Printf("%q -> %q;\n", f.String(), o.String())
 				// TODO: _Gscan locks, misc locks
 				if o == lockFn {
 					lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
 					for _, ls := range lockSets.M {
-						s.lockOrder.Add(ls, lock)
-						ls = ls.Plus(lock)
+						s.lockOrder.Add(ls, lock, s.stack)
+						ls = ls.Plus(lock, s.stack)
 						nextLockSets.Add(ls)
 					}
 					//log.Print("call to runtime.lock: ", s.pta.Queries[instr.Call.Args[0]].PointsTo())
@@ -818,6 +833,7 @@ func (s *state) walkBlock(f *ssa.Function, b *ssa.BasicBlock, blockCache map[blo
 					}
 				}
 			}
+			s.stack = s.stack.parent
 			lockSets = nextLockSets
 
 		case *ssa.Return:

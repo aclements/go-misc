@@ -102,18 +102,6 @@ func main() {
 	// })
 	// fmt.Println("}")
 
-	if false {
-		m := runtimePkg.Members["mcommoninit"].(*ssa.Function)
-		m.WriteTo(os.Stderr)
-
-		for k, v := range pta.Queries {
-			if k.Parent() == nil {
-				continue
-			}
-			fmt.Fprintln(os.Stderr, k.Parent().Name(), k.Name(), v.PointsTo())
-		}
-	}
-
 	stringSpace := NewStringSpace()
 	s := state{
 		fset: fset,
@@ -748,10 +736,11 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 			ifInstrs = append(ifInstrs, instr)
 		}
 		ifDeps := livenessFor(f, ifInstrs)
-		if false { // Debug
+		if debugFunctions[f.String()] {
 			f.WriteTo(os.Stderr)
+			fmt.Fprintf(os.Stderr, "if deps:\n")
 			for bid, vals := range ifDeps {
-				fmt.Fprintf(os.Stderr, "%d: ", bid)
+				fmt.Fprintf(os.Stderr, "  %d: ", bid)
 				for dep := range vals {
 					fmt.Fprintf(os.Stderr, " %s", dep.(ssa.Value).Name())
 				}

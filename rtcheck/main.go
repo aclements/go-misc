@@ -113,9 +113,15 @@ func main() {
 	// Output call graph if requested.
 	if outCallGraph != "" {
 		withWriter(outCallGraph, func(w io.Writer) {
+			type edge struct{ a, b *callgraph.Node }
+			have := make(map[edge]struct{})
 			fmt.Fprintln(w, "digraph callgraph {")
 			callgraph.GraphVisitEdges(pta.CallGraph, func(e *callgraph.Edge) error {
-				fmt.Fprintf(w, "%q -> %q;\n", e.Caller, e.Callee)
+				if _, ok := have[edge{e.Caller, e.Callee}]; ok {
+					return nil
+				}
+				have[edge{e.Caller, e.Callee}] = struct{}{}
+				fmt.Fprintf(w, "%q -> %q;\n", e.Caller.Func, e.Callee.Func)
 				return nil
 			})
 			fmt.Fprintln(w, "}")

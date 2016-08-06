@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/build"
@@ -9,11 +10,13 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"io"
 	"log"
 	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	"golang.org/x/tools/go/buildutil"
 	"golang.org/x/tools/go/callgraph"
@@ -26,11 +29,26 @@ import (
 // debugFunctions is a set of functions to enable extra debugging
 // tracing for. Each function in debugFunctions will generate a dot
 // file containing the block exploration graph of that function.
-var debugFunctions = map[string]bool{
-	"runtime.gcStart": true,
-}
+var debugFunctions = map[string]bool{}
 
 func main() {
+	var (
+		outLockGraph string
+		outCallGraph string
+		debugFuncs   string
+	)
+	flag.StringVar(&outLockGraph, "lockgraph", "", "write lock graph in dot to `file`")
+	flag.StringVar(&outCallGraph, "callgraph", "", "write call graph in dot to `file`")
+	flag.StringVar(&debugFuncs, "debugfuncs", "", "write debug graphs for `funcs` (comma-separated list)")
+	flag.Parse()
+	if flag.NArg() > 0 {
+		flag.Usage()
+		os.Exit(2)
+	}
+	for _, name := range strings.Split(debugFuncs, ",") {
+		debugFunctions[name] = true
+	}
+
 	var conf loader.Config
 
 	// TODO: Check all reasonable arch/OS combos.
@@ -91,12 +109,18 @@ func main() {
 	cg := pta.CallGraph
 
 	cg.DeleteSyntheticNodes() // ?
-	// fmt.Println("digraph x {")
-	// callgraph.GraphVisitEdges(pta.CallGraph, func(e *callgraph.Edge) error {
-	// 	fmt.Printf("\"%s\" -> \"%s\";\n", e.Caller, e.Callee)
-	// 	return nil
-	// })
-	// fmt.Println("}")
+
+	// Output call graph if requested.
+	if outCallGraph != "" {
+		withWriter(outCallGraph, func(w io.Writer) {
+			fmt.Fprintln(w, "digraph callgraph {")
+			callgraph.GraphVisitEdges(pta.CallGraph, func(e *callgraph.Edge) error {
+				fmt.Fprintf(w, "%q -> %q;\n", e.Caller, e.Callee)
+				return nil
+			})
+			fmt.Fprintln(w, "}")
+		})
+	}
 
 	stringSpace := NewStringSpace()
 	s := state{
@@ -128,31 +152,36 @@ func main() {
 
 	// Dump debug trees.
 	if s.debugTree != nil {
-		func() {
-			f, err := os.Create("debug-functions.dot")
-			if err != nil {
-				log.Fatal(err)
-			}
-			defer f.Close()
-			s.debugTree.WriteToDot(f)
-		}()
+		withWriter("debug-functions.dot", s.debugTree.WriteToDot)
 	}
 	for fn, fInfo := range s.fns {
 		if fInfo.debugTree == nil {
 			continue
 		}
-		func() {
-			f, err := os.Create(fmt.Sprintf("debug-%s.dot", fn))
-			if err != nil {
-				log.Fatal(err)
-			}
-			defer f.Close()
-			fInfo.debugTree.WriteToDot(f)
-		}()
+		withWriter(fmt.Sprintf("debug-%s.dot", fn), fInfo.debugTree.WriteToDot)
 	}
 
-	//s.lockOrder.WriteToDot(os.Stdout)
+	// Output lock graph if requested.
+	if outLockGraph != "" {
+		withWriter(outLockGraph, s.lockOrder.WriteToDot)
+	}
+
+	// Output text lock cycle report.
 	s.lockOrder.Check(os.Stdout)
+}
+
+// withWriter creates path and calls f with the file.
+func withWriter(path string, f func(w io.Writer)) {
+	file, err := os.Create(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Fatal(err)
+		}
+	}()
+	f(file)
 }
 
 // rewriteSources rewrites all of the Go files in pkg to eliminate

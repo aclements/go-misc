@@ -242,6 +242,12 @@ func main() {
 	}
 
 	// Output text lock cycle report.
+	fmt.Print("roots:")
+	for _, fn := range s.roots {
+		fmt.Printf(" %s", fn)
+	}
+	fmt.Print("\n")
+	fmt.Printf("number of lock cycles: %d\n\n", len(s.lockOrder.FindCycles()))
 	s.lockOrder.Check(os.Stdout)
 }
 

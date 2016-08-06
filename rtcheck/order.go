@@ -16,6 +16,9 @@ type LockOrder struct {
 	sp   *StringSpace
 	fset *token.FileSet
 	m    map[lockOrderEdge]map[lockOrderInfo]struct{}
+
+	// cycles is the cached result of FindCycles, or nil.
+	cycles [][]int
 }
 
 type lockOrderEdge struct {
@@ -40,6 +43,7 @@ func NewLockOrder(fset *token.FileSet) *LockOrder {
 // locked are currently held and the locks in locking are being
 // acquired at stack.
 func (lo *LockOrder) Add(locked *LockSet, locking pointer.PointsToSet, stack *StackFrame) {
+	lo.cycles = nil
 	if lo.sp == nil {
 		lo.sp = locked.sp
 	} else if lo.sp != locked.sp {
@@ -80,6 +84,10 @@ func (lo *LockOrder) Add(locked *LockSet, locking pointer.PointsToSet, stack *St
 // is a list of lock IDs from the StringSpace in cycle order (without
 // any repetition).
 func (lo *LockOrder) FindCycles() [][]int {
+	if lo.cycles != nil {
+		return lo.cycles
+	}
+
 	// Compute out-edge adjacency list.
 	out := map[int][]int{}
 	for edge := range lo.m {
@@ -125,6 +133,8 @@ func (lo *LockOrder) FindCycles() [][]int {
 		dfs(root, root)
 	}
 
+	// Cache the result.
+	lo.cycles = cycles
 	return cycles
 }
 
@@ -161,6 +171,9 @@ func (lo *LockOrder) WriteToDot(w io.Writer) {
 }
 
 // Check writes a text report of lock cycles to w.
+//
+// This report is thorough, but can be quite repetitive, since a
+// single edge can participate in multiple cycles.
 func (lo *LockOrder) Check(w io.Writer) {
 	cycles := lo.FindCycles()
 	fset := lo.fset

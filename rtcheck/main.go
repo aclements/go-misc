@@ -219,10 +219,16 @@ func main() {
 		s.addRoot(m)
 	}
 	for i := 0; i < len(s.roots); i++ {
-		// TODO: Warn if any locks are held at return.
 		root := s.roots[i]
 		exitLockSets := s.walkFunction(root, NewLockSet(stringSpace))
-		log.Print("locks at return: ", exitLockSets)
+		// Warn if any locks are held at return.
+		for _, ls := range exitLockSets.M {
+			if len(ls.stacks) == 0 {
+				continue
+			}
+			s.warnl(root.Pos(), "locks at return from root %s: %s", root, exitLockSets)
+			s.warnl(root.Pos(), "\t(likely analysis failed to match control flow for unlock)\n")
+		}
 	}
 
 	// Dump debug trees.
@@ -242,6 +248,7 @@ func main() {
 	}
 
 	// Output text lock cycle report.
+	fmt.Println()
 	fmt.Print("roots:")
 	for _, fn := range s.roots {
 		fmt.Printf(" %s", fn)
@@ -372,6 +379,13 @@ func aeshash(p unsafe.Pointer, h, s uintptr) uintptr { return 0 }
 func aeshash32(p unsafe.Pointer, h uintptr) uintptr { return 0 }
 func aeshash64(p unsafe.Pointer, h uintptr) uintptr { return 0 }
 func aeshashstr(p unsafe.Pointer, h uintptr) uintptr { return 0 }
+
+// netpoll_epoll.go
+func epollcreate(size int32) int32 { return 0 }
+func epollcreate1(flags int32) int32 { return 0 }
+func epollctl(epfd, op, fd int32, ev *epollevent) int32 { return 0 }
+func epollwait(epfd int32, ev *epollevent, nev, timeout int32) int32 { return 0 }
+func closeonexec(fd int32) {}
 `
 	var atomicStubs = `
 package atomic
@@ -533,7 +547,7 @@ func rewriteRuntime(f *ast.File) {
 					},
 				}
 			case "traceEvent":
-				node.Body = nil
+				node.Body = &ast.BlockStmt{}
 			}
 		}
 		return node
@@ -558,7 +572,6 @@ func registerLockQueries(pkg *ssa.Package, ptrConfig *pointer.Config) {
 				}
 				target := call.Common().StaticCallee()
 				if target == lockFn || target == unlockFn {
-					log.Print("found ", inst, " in ", member)
 					ptrConfig.AddQuery(call.Common().Args[0])
 				}
 			}
@@ -866,6 +879,13 @@ type state struct {
 	debugging bool
 }
 
+func (s *state) warnl(pos token.Pos, format string, args ...interface{}) {
+	if pos.IsValid() {
+		fmt.Printf("%s: ", s.fset.Position(pos))
+	}
+	fmt.Printf(format+"\n", args...)
+}
+
 // addRoot adds fn as a root of the control flow graph to visit.
 func (s *state) addRoot(fn *ssa.Function) {
 	if _, ok := s.rootSet[fn]; ok {
@@ -892,9 +912,15 @@ func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
 		}
 		return callees
 	}
-	// TODO: This happens for print and println, which we should
-	// turn into calls to their implementation functions.
-	log.Print("no call graph for ", call, " in ", call.Parent(), " at ", s.fset.Position(call.Pos()))
+	if _, ok := call.Common().Value.(*ssa.Builtin); ok {
+		// Ignore these.
+		//
+		// TODO: Some of these we should turn into calls to
+		// real runtime functions.
+		return nil
+	}
+
+	s.warnl(call.Pos(), "no call graph for %v", call)
 	return nil
 
 }
@@ -950,7 +976,7 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 		s.fns[f] = fInfo
 
 		if f.Blocks == nil {
-			log.Println("warning: external function", f.Name())
+			s.warnl(f.Pos(), "external function %s", f)
 		}
 
 		if debugFunctions[f.String()] {
@@ -1015,7 +1041,7 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	exitLockSets := NewLockSetSet()
 	s.walkBlock(f.Blocks[0], blockCache, nil, locks, exitLockSets)
 	fInfo.exitLockSets[locksKey] = exitLockSets
-	log.Printf("%s: %s -> %s", f.Name(), locks, exitLockSets)
+	//log.Printf("%s: %s -> %s", f.Name(), locks, exitLockSets)
 	if s.debugging {
 		s.debugTree.Appendf("\nexit: %v", exitLockSets)
 	}
@@ -1075,7 +1101,7 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 			}
 		}
 		if len(bck2s) > 10 {
-			log.Print("warning: too many states at ", f.Name(), " block ", b.Index, "; giving up on path")
+			s.warnl(blockPos(b), "too many states, trimming path (block %d)", b.Index)
 			// for _, bck2 := range bck2s {
 			// 	log.Print("next ", f.Name(), ":", b.Index)
 			// 	bck2.vs.WriteTo(os.Stderr)
@@ -1152,7 +1178,7 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 
 		case *ssa.Go:
 			for _, o := range s.callees(instr) {
-				log.Printf("found go %s; adding to roots", o)
+				//log.Printf("found go %s; adding to roots", o)
 				s.addRoot(o)
 			}
 
@@ -1198,6 +1224,7 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 		}
 		return 0
 	}
+	_ = exitPos
 
 	// If this is an "if", see if we have enough information to
 	// determine its direction.
@@ -1205,7 +1232,7 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 	if ifCond != nil {
 		x := vs.Get(ifCond)
 		if x != nil {
-			log.Printf("determined control flow at %s: %v", s.fset.Position(exitPos(b)), x)
+			//log.Printf("determined control flow at %s: %v", s.fset.Position(exitPos(b)), x)
 			if constant.BoolVal(x.(DynConst).c) {
 				// Take true path.
 				succs = succs[:1]
@@ -1258,5 +1285,37 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 			}
 			s.walkBlock(b2, blockCache, vs2, succLockSet, exitLockSets)
 		}
+	}
+}
+
+// blockPos returns the best position it can for b.
+func blockPos(b *ssa.BasicBlock) token.Pos {
+	var visited []bool
+	for {
+		if visited != nil {
+			if visited[b.Index] {
+				// Give up.
+				return b.Parent().Pos()
+			}
+			visited[b.Index] = true
+		}
+		// Phis have useless line numbers. Find the first
+		// "real" instruction.
+		for _, i := range b.Instrs {
+			if _, ok := i.(*ssa.Phi); ok || !i.Pos().IsValid() {
+				continue
+			}
+			return i.Pos()
+		}
+		if len(b.Preds) == 0 {
+			return b.Parent().Pos()
+		}
+		// Try b's predecessor.
+		if visited == nil {
+			// Delayed allocation of visited.
+			visited = make([]bool, len(b.Parent().Blocks))
+			visited[b.Index] = true
+		}
+		b = b.Preds[0]
 	}
 }

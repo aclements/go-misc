@@ -1,3 +1,72 @@
+// Command rtcheck performs static analysis of the Go runtime.
+//
+// rtcheck currently implements one analysis:
+//
+// Deadlock detection
+//
+// Static deadlock detection constructs a lock graph and reports
+// cycles in that lock graph. These cycles indicate code paths with
+// the potential for deadlock.
+//
+// The report from the deadlock detector indicates all discovered
+// cycles in the lock graph and, for each edge L1 -> L2, shows the
+// code paths that acquire L2 while holding L1. In the simplest case
+// where L1 and L2 are the same lock, this cycle represents a
+// potential for self-deadlock within a single thread. More generally,
+// it means that if all of the code paths in the cycle execute
+// concurrently, the system may deadlock. If one of the edges in a
+// cycle is represented by significantly fewer code paths than the
+// other edges, fixing those code paths is likely the easiest way to
+// fix the deadlock.
+//
+// This uses an inter-procedural, path-sensitive, and partially
+// value-sensitive analysis based on Engler and Ashcroft, "RacerX:
+// Effective, static detection of race conditions and deadlocks", SOSP
+// 2003. It works by exploring possible code paths and finding paths
+// on which two or more locks are held simultaneously. Any such path
+// produces one or more edges in the lock graph indicating the order
+// in which those locks were acquired.
+//
+// Like many static analyses, this has limitations. First, it doesn't
+// reason about individual locks, but about lock *classes*, which are
+// modeled as sets of locks that may alias each other. As a result, if
+// the code acquires multiple locks from the same lock class
+// simultaneously (such as locks from different instances of the same
+// structure), but is careful to ensure a consistent order between
+// those locks at runtime (e.g., by sorting them), this analysis will
+// consider that a potential deadlock, even though it will not
+// deadlock at runtime.
+//
+// Second, it may explore code paths that are impossible at runtime.
+// The analysis performs very simple intra-procedural value
+// propagation to eliminate obviously impossible code paths, but this
+// is easily fooled. Consider
+//
+//     if complex condition 1 {
+//         lock(&x)
+//     }
+//     ...
+//     if complex condition 2 {
+//         unlock(&x)
+//     }
+//
+// where complex conditions 1 and 2 are equivalent, but beyond the
+// reach of the simple value propagation. The analysis will see *four*
+// distinct code paths here, rather than the two that are actually
+// possible, and think that x can still be held after the second if.
+// Similarly,
+//
+//     lock(&x)
+//     ensure !c
+//     ...
+//     if c {
+//         lock(&x)
+//     }
+//
+// If c can't be deduced by value propagation, this will appear as a
+// potential self-deadlock. Of course, if it requires complex dynamic
+// reasoning to show that a deadlock cannot occur at runtime, it may
+// be a good idea to simplify the code anyway.
 package main
 
 import (

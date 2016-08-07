@@ -5,10 +5,17 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
-	"io"
-
 	"go/token"
+	"html/template"
+	"io"
+	"io/ioutil"
+	"log"
+	"math/big"
+	"os"
+	"os/exec"
+	"path/filepath"
 
 	"golang.org/x/tools/go/pointer"
 	"golang.org/x/tools/go/ssa"
@@ -145,6 +152,10 @@ func (lo *LockOrder) FindCycles() [][]int {
 // WriteToDot writes the lock graph in the dot language to w, with
 // cycles highlighted.
 func (lo *LockOrder) WriteToDot(w io.Writer) {
+	lo.writeToDot(w)
+}
+
+func (lo *LockOrder) writeToDot(w io.Writer) map[lockOrderEdge]string {
 	// Find cycles to highlight edges.
 	cycles := lo.FindCycles()
 	cycleEdges := map[lockOrderEdge]struct{}{}
@@ -161,17 +172,65 @@ func (lo *LockOrder) WriteToDot(w io.Writer) {
 	}
 
 	fmt.Fprintf(w, "digraph locks {\n")
+	fmt.Fprintf(w, "  tooltip=\" \";\n")
+	var nodes big.Int
+	nid := func(lockId int) string {
+		return fmt.Sprintf("l%d", lockId)
+	}
+	// Write edges.
+	edgeIds := make(map[lockOrderEdge]string)
 	for edge, stacks := range lo.m {
-		fromName := lo.sp.s[edge.fromId]
-		toName := lo.sp.s[edge.toId]
 		var props string
 		if _, ok := cycleEdges[edge]; ok {
 			width := 1 + 6*float64(len(stacks))/float64(maxStack)
-			props = fmt.Sprintf(" [label=%d,penwidth=%f,color=red]", len(stacks), width)
+			props = fmt.Sprintf(",label=%d,penwidth=%f,color=red", len(stacks), width)
 		}
-		fmt.Fprintf(w, "  %q -> %q%s;\n", fromName, toName, props)
+		id := fmt.Sprintf("edge%d-%d", edge.fromId, edge.toId)
+		edgeIds[edge] = id
+		tooltip := fmt.Sprintf("%s -> %s", lo.sp.s[edge.fromId], lo.sp.s[edge.toId])
+		fmt.Fprintf(w, "  %s -> %s [id=%q,tooltip=%q%s];\n", nid(edge.fromId), nid(edge.toId), id, tooltip, props)
+		nodes.SetBit(&nodes, edge.fromId, 1)
+		nodes.SetBit(&nodes, edge.toId, 1)
+	}
+	// Write nodes. This excludes lone locks: these are only the
+	// locks that participate in some ordering
+	for i := 0; i < nodes.BitLen(); i++ {
+		if nodes.Bit(i) == 1 {
+			fmt.Fprintf(w, "  %s [label=%q];\n", nid(i), lo.sp.s[i])
+		}
 	}
 	fmt.Fprintf(w, "}\n")
+	return edgeIds
+}
+
+type renderedPath struct {
+	RootFn   string
+	From, To []renderedFrame
+}
+
+type renderedFrame struct {
+	Op  string
+	Pos token.Position
+}
+
+func (lo *LockOrder) renderInfo(edge lockOrderEdge, info lockOrderInfo) renderedPath {
+	fset := lo.fset
+	fromStack := info.fromStack.Flatten(nil)
+	toStack := info.toStack.Flatten(nil)
+	rootFn := fromStack[0].Parent()
+	renderStack := func(stack []*ssa.Call, tail string) []renderedFrame {
+		var frames []renderedFrame
+		for i, call := range stack[1:] {
+			frames = append(frames, renderedFrame{"calls " + call.Parent().String(), fset.Position(stack[i].Pos())})
+		}
+		frames = append(frames, renderedFrame{tail, fset.Position(stack[len(stack)-1].Pos())})
+		return frames
+	}
+	return renderedPath{
+		rootFn.String(),
+		renderStack(fromStack, "acquires "+lo.sp.s[edge.fromId]),
+		renderStack(toStack, "acquires "+lo.sp.s[edge.toId]),
+	}
 }
 
 // Check writes a text report of lock cycles to w.
@@ -180,25 +239,19 @@ func (lo *LockOrder) WriteToDot(w io.Writer) {
 // single edge can participate in multiple cycles.
 func (lo *LockOrder) Check(w io.Writer) {
 	cycles := lo.FindCycles()
-	fset := lo.fset
 
 	// Report cycles.
-	printStack := func(stack []*ssa.Call, tail string) {
+	printStack := func(stack []renderedFrame) {
 		indent := 6
-		for i, call := range stack[1:] {
-			fmt.Fprintf(w, "%*scalls %s at %s\n", indent, "", call.Parent(), fset.Position(stack[i].Pos()))
+		for _, fr := range stack {
+			fmt.Fprintf(w, "%*s%s at %s\n", indent, "", fr.Op, fr.Pos)
 			indent += 2
 		}
-		fmt.Fprintf(w, "%*s%s at %s\n", indent, "", tail, fset.Position(stack[len(stack)-1].Pos()))
 	}
-	printInfo := func(tid int, edge lockOrderEdge, info lockOrderInfo) {
-		fromStack := info.fromStack.Flatten(nil)
-		toStack := info.toStack.Flatten(nil)
-
-		lastCommonFn := fromStack[0].Parent()
-		fmt.Fprintf(w, "    %s\n", lastCommonFn)
-		printStack(fromStack, fmt.Sprintf("acquires %s", lo.sp.s[edge.fromId]))
-		printStack(toStack, fmt.Sprintf("acquires %s", lo.sp.s[edge.toId]))
+	printInfo := func(rinfo renderedPath) {
+		fmt.Fprintf(w, "    %s\n", rinfo.RootFn)
+		printStack(rinfo.From)
+		printStack(rinfo.To)
 	}
 	for _, cycle := range cycles {
 		cycle = append(cycle, cycle[0])
@@ -217,9 +270,95 @@ func (lo *LockOrder) Check(w io.Writer) {
 
 			fmt.Fprintf(w, "  %d path(s) acquire %s then %s:\n", len(infos), lo.sp.s[edge.fromId], lo.sp.s[edge.toId])
 			for info, _ := range infos {
-				printInfo(i, edge, info)
+				rinfo := lo.renderInfo(edge, info)
+				printInfo(rinfo)
 			}
 			fmt.Fprintf(w, "\n")
 		}
+	}
+}
+
+// WriteToHTML writes a self-contained, interactive HTML lock graph
+// report to w. It requires dot to be in $PATH.
+func (lo *LockOrder) WriteToHTML(w io.Writer) {
+	// Generate SVG from dot graph.
+	cmd := exec.Command("dot", "-Tsvg")
+	dotin, err := cmd.StdinPipe()
+	if err != nil {
+		log.Fatal("creating pipe to dot: ", err)
+	}
+	dotDone := make(chan bool)
+	var edgeIds map[lockOrderEdge]string
+	go func() {
+		edgeIds = lo.writeToDot(dotin)
+		dotin.Close()
+		dotDone <- true
+	}()
+	svg, err := cmd.Output()
+	if err != nil {
+		log.Fatal("error running dot: ", err)
+	}
+	<-dotDone
+	// Strip stuff before the SVG tag so we can put it into HTML.
+	if i := bytes.Index(svg, []byte("<svg")); i > 0 {
+		svg = svg[i:]
+	}
+
+	// Construct JSON for lock graph details.
+	//
+	// TODO: This JSON is ludicrously inefficient. It's so big it
+	// takes appreciable time for the browser to load this.
+	type jsonEdge struct {
+		EdgeID string
+		Locks  [2]string
+		Paths  []renderedPath
+	}
+	jsonEdges := []jsonEdge{}
+	for edge, infos := range lo.m {
+		var rpaths []renderedPath
+		for info := range infos {
+			rpaths = append(rpaths, lo.renderInfo(edge, info))
+		}
+		jsonEdges = append(jsonEdges, jsonEdge{
+			EdgeID: edgeIds[edge],
+			Locks: [2]string{lo.sp.s[edge.fromId],
+				lo.sp.s[edge.toId],
+			},
+			Paths: rpaths,
+		})
+	}
+
+	// Find the static file path.
+	//
+	// TODO: Optionally bake these into the binary.
+	var static string
+	var found bool
+	for _, gopath := range filepath.SplitList(os.Getenv("GOPATH")) {
+		static = filepath.Join(gopath, "src/github.com/aclements/go-misc/rtcheck/static")
+		if _, err := os.Stat(static); err == nil {
+			found = true
+			break
+		}
+	}
+	if !found {
+		log.Fatal("unable to find HTML template in $GOPATH")
+	}
+
+	// Generate HTML.
+	tmpl, err := template.ParseFiles(filepath.Join(static, "tmpl-order.html"))
+	if err != nil {
+		log.Fatal("loading HTML templates: ", err)
+	}
+	mainJS, err := ioutil.ReadFile(filepath.Join(static, "main.js"))
+	if err != nil {
+		log.Fatal("loading main.js: ", err)
+	}
+	err = tmpl.Execute(w, map[string]interface{}{
+		"graph":  template.HTML(svg),
+		"edges":  jsonEdges,
+		"mainJS": template.JS(mainJS),
+	})
+	if err != nil {
+		log.Fatal("executing HTML template: ", err)
 	}
 }

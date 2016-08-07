@@ -122,10 +122,12 @@ func main() {
 	var (
 		outLockGraph string
 		outCallGraph string
+		outHTML      string
 		debugFuncs   string
 	)
 	flag.StringVar(&outLockGraph, "lockgraph", "", "write lock graph in dot to `file`")
 	flag.StringVar(&outCallGraph, "callgraph", "", "write call graph in dot to `file`")
+	flag.StringVar(&outHTML, "html", "", "write HTML deadlock report to `file`")
 	flag.StringVar(&debugFuncs, "debugfuncs", "", "write debug graphs for `funcs` (comma-separated list)")
 	flag.Parse()
 	if flag.NArg() > 0 {
@@ -260,9 +262,14 @@ func main() {
 		withWriter(fmt.Sprintf("debug-%s.dot", fn), fInfo.debugTree.WriteToDot)
 	}
 
-	// Output lock graph if requested.
+	// Output lock graph.
 	if outLockGraph != "" {
 		withWriter(outLockGraph, s.lockOrder.WriteToDot)
+	}
+
+	// Output HTML report.
+	if outHTML != "" {
+		withWriter(outHTML, s.lockOrder.WriteToHTML)
 	}
 
 	// Output text lock cycle report.

@@ -1,6 +1,6 @@
 "use strict";
 
-function initOrder(edges) {
+function initOrder(strings, edges) {
     // Hook into the graph edges.
     //
     // TODO: Highlight the hovered path and neighboring nodes, or
@@ -16,14 +16,14 @@ function initOrder(edges) {
         g.
           css({cursor: "pointer"}).
           on("click", function(ev) {
-              showEdge(edge);
+              showEdge(strings, edge);
           });
     });
     zoomify($("#graph")[0], $("#graphWrap")[0]);
     $("#graph").css("visibility", "visible");
 }
 
-function showEdge(edge) {
+function showEdge(strings, edge) {
     var info = $("#info");
     info.empty().scrollTop(0);
 
@@ -34,20 +34,20 @@ function showEdge(edge) {
 
     $.each(edge.Paths, function(_, path) {
         var p = $("<p>").appendTo(info).css("white-space", "nowrap");
-        $("<div>").appendTo(p).text(path.RootFn);
-        function posText(pos) {
+        $("<div>").appendTo(p).text(strings[path.RootFn]);
+        function posText(pathID, line) {
             // Keep only the trailing part of the path.
-            return pos.Filename.replace(/.*\//, "") + ":" + pos.Line;
+            return strings[pathID].replace(/.*\//, "") + ":" + line;
         }
-        function renderStack(frames) {
+        function renderStack(stack) {
             var elided = [];
             var elideDiv;
             // Render each frame.
-            $.each(frames, function(i, frame) {
+            $.each(stack.Op, function(i) {
                 var div = $("<div>").appendTo(p);
                 var indent = i == 0 ? "1em" : "2em";
                 var showFirst = 2, showLast = 3;
-                if (i >= showFirst && frames.length - i > showLast) {
+                if (i >= showFirst && stack.Op.length - i > showLast) {
                     // Elide middle of the path.
                     if (elided.length === 0) {
                         elideDiv = $("<div>").appendTo(p).css("padding-left", indent);
@@ -56,7 +56,7 @@ function showEdge(edge) {
                 }
                 div.appendTo(p);
                 // TODO: Link to path somehow.
-                div.text(frame.Op + " at " + posText(frame.Pos));
+                div.text(strings[stack.Op[i]] + " at " + posText(stack.P[i], stack.L[i]));
                 div.css("padding-left", indent);
             });
             // If we elided frames, update the show link.

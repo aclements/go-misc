@@ -304,27 +304,50 @@ func (lo *LockOrder) WriteToHTML(w io.Writer) {
 		svg = svg[i:]
 	}
 
-	// Construct JSON for lock graph details.
-	//
-	// TODO: This JSON is ludicrously inefficient. It's so big it
-	// takes appreciable time for the browser to load this.
+	// Construct JSON for lock graph details. This is about an
+	// order of magnitude smaller than the naive renderedFrames.
+	jsonStrings := NewStringSpace()
+	// To save space, we use a struct of arrays.
+	type jsonStack struct {
+		Op     []int
+		PathID []int `json:"P"`
+		Line   []int `json:"L"`
+	}
+	xFrames := func(rs []renderedFrame) jsonStack {
+		out := jsonStack{
+			make([]int, len(rs)),
+			make([]int, len(rs)),
+			make([]int, len(rs)),
+		}
+		for i, r := range rs {
+			out.Op[i] = jsonStrings.Intern(r.Op)
+			out.PathID[i] = jsonStrings.Intern(r.Pos.Filename)
+			out.Line[i] = r.Pos.Line
+		}
+		return out
+	}
+	type jsonPath struct {
+		RootFn   int
+		From, To jsonStack
+	}
+	xPath := func(r renderedPath) jsonPath {
+		return jsonPath{jsonStrings.Intern(r.RootFn), xFrames(r.From), xFrames(r.To)}
+	}
 	type jsonEdge struct {
 		EdgeID string
 		Locks  [2]string
-		Paths  []renderedPath
+		Paths  []jsonPath
 	}
 	jsonEdges := []jsonEdge{}
 	for edge, infos := range lo.m {
-		var rpaths []renderedPath
+		var paths []jsonPath
 		for info := range infos {
-			rpaths = append(rpaths, lo.renderInfo(edge, info))
+			paths = append(paths, xPath(lo.renderInfo(edge, info)))
 		}
 		jsonEdges = append(jsonEdges, jsonEdge{
 			EdgeID: edgeIds[edge],
-			Locks: [2]string{lo.sp.s[edge.fromId],
-				lo.sp.s[edge.toId],
-			},
-			Paths: rpaths,
+			Locks:  [2]string{lo.sp.s[edge.fromId], lo.sp.s[edge.toId]},
+			Paths:  paths,
 		})
 	}
 
@@ -354,9 +377,10 @@ func (lo *LockOrder) WriteToHTML(w io.Writer) {
 		log.Fatal("loading main.js: ", err)
 	}
 	err = tmpl.Execute(w, map[string]interface{}{
-		"graph":  template.HTML(svg),
-		"edges":  jsonEdges,
-		"mainJS": template.JS(mainJS),
+		"graph":   template.HTML(svg),
+		"strings": jsonStrings.s,
+		"edges":   jsonEdges,
+		"mainJS":  template.JS(mainJS),
 	})
 	if err != nil {
 		log.Fatal("executing HTML template: ", err)

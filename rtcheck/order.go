@@ -188,6 +188,8 @@ func (lo *LockOrder) writeToDot(w io.Writer) map[lockOrderEdge]string {
 		id := fmt.Sprintf("edge%d-%d", edge.fromId, edge.toId)
 		edgeIds[edge] = id
 		tooltip := fmt.Sprintf("%s -> %s", lo.sp.s[edge.fromId], lo.sp.s[edge.toId])
+		// We set the edge ID so Javascript can find the
+		// element in the SVG.
 		fmt.Fprintf(w, "  %s -> %s [id=%q,tooltip=%q%s];\n", nid(edge.fromId), nid(edge.toId), id, tooltip, props)
 		nodes.SetBit(&nodes, edge.fromId, 1)
 		nodes.SetBit(&nodes, edge.toId, 1)
@@ -196,7 +198,9 @@ func (lo *LockOrder) writeToDot(w io.Writer) map[lockOrderEdge]string {
 	// locks that participate in some ordering
 	for i := 0; i < nodes.BitLen(); i++ {
 		if nodes.Bit(i) == 1 {
-			fmt.Fprintf(w, "  %s [label=%q];\n", nid(i), lo.sp.s[i])
+			// We set the fill color to white so
+			// mouseovers on this node work nicely.
+			fmt.Fprintf(w, "  %s [label=%q,style=filled,fillcolor=white];\n", nid(i), lo.sp.s[i])
 		}
 	}
 	fmt.Fprintf(w, "}\n")

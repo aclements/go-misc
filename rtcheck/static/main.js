@@ -2,9 +2,6 @@
 
 function initOrder(strings, edges) {
     // Hook into the graph edges.
-    //
-    // TODO: Highlight the hovered path and neighboring nodes, or
-    // maybe the selected edge.
     var labelRe = /^l([0-9]+)-l([0-9]+)$/;
     $.each(edges, function(_, edge) {
         var g = $(document.getElementById(edge.EdgeID));
@@ -19,6 +16,7 @@ function initOrder(strings, edges) {
               showEdge(strings, edge);
           });
     });
+    enableHighlighting($("#graph")[0]);
     zoomify($("#graph")[0], $("#graphWrap")[0]);
     $("#graph").css("visibility", "visible");
 }
@@ -74,6 +72,63 @@ function showEdge(strings, edge) {
         }
         renderStack(path.From);
         renderStack(path.To);
+    });
+}
+
+// enableHighlighting takes an GraphViz-generated SVG and enables
+// interactive highlighting when the mouse hovers over nodes and
+// edges.
+function enableHighlighting(svg) {
+    var nodes = {}, edges = {};
+    function all(opacity) {
+        $.each(nodes, function(_, node) {
+            $(node.dom).clearQueue().fadeTo('fast', opacity);
+        })
+        $.each(edges, function(_, edge) {
+            $(edge.dom).clearQueue().fadeTo('fast', opacity);
+        })
+    }
+
+    function highlight(dom) {
+        $(dom).clearQueue().fadeTo('fast', 1);
+    }
+
+    // Process nodes.
+    $(".node", svg).each(function(_, node) {
+        var id = $("title", node).text();
+        var info = {dom: node, edges: []};
+        nodes[id] = info;
+        $(node).on("mouseenter", function() {
+            all(0.25);
+            highlight(node);
+            $.each(info.edges, function(_, edge) {
+                highlight(edge.dom);
+                if (edge.from !== id)
+                    highlight(nodes[edge.from].dom);
+                if (edge.to !== id)
+                    highlight(nodes[edge.to].dom);
+            });
+        }).on("mouseleave", function() {
+            all(1);
+        });
+    });
+
+    // Process edges.
+    $(".edge", svg).each(function(_, edge) {
+        var id = $("title", edge).text();
+        var m = id.match(/^(.*)->(.*)$/);
+        var info = {dom: edge, from: m[1], to: m[2]};
+        edges[edge.id] = info;
+        nodes[info.from].edges.push(info);
+        nodes[info.to].edges.push(info);
+        $(edge).on("mouseenter", function() {
+            all(0.25);
+            highlight(edge);
+            highlight(nodes[info.from].dom);
+            highlight(nodes[info.to].dom);
+        }).on("mouseleave", function() {
+            all(1);
+        });
     });
 }
 

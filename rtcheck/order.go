@@ -223,7 +223,7 @@ func (lo *LockOrder) renderInfo(edge lockOrderEdge, info lockOrderInfo) rendered
 	fromStack := info.fromStack.Flatten(nil)
 	toStack := info.toStack.Flatten(nil)
 	rootFn := fromStack[0].Parent()
-	renderStack := func(stack []*ssa.Call, tail string) []renderedFrame {
+	renderStack := func(stack []ssa.Instruction, tail string) []renderedFrame {
 		var frames []renderedFrame
 		for i, call := range stack[1:] {
 			frames = append(frames, renderedFrame{"calls " + call.Parent().String(), fset.Position(stack[i].Pos())})

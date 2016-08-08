@@ -15,7 +15,7 @@ import (
 // A callHandler implements special handling of a function call. It
 // should append the updated PathState to newps and return the
 // resulting slice.
-type callHandler func(s *state, ps PathState, instr *ssa.Call, newps []PathState) []PathState
+type callHandler func(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState
 
 // callHandlers maps from function names (the result of
 // ssa.Function.String()) to handlers for special functions.
@@ -35,8 +35,8 @@ var callHandlers = map[string]callHandler{
 	"runtime.restartg": handleRuntimeCasfrom_Gscanstatus,
 }
 
-func handleRuntimeLock(s *state, ps PathState, instr *ssa.Call, newps []PathState) []PathState {
-	lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
+func handleRuntimeLock(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
+	lock := s.pta.Queries[instr.(*ssa.Call).Call.Args[0]].PointsTo()
 	newls := NewLockSet(ps.lockSet.sp).Plus(lock, s.stack)
 	s.lockOrder.Add(ps.lockSet, newls, s.stack)
 	ls2 := ps.lockSet.Plus(lock, s.stack)
@@ -51,21 +51,21 @@ func handleRuntimeLock(s *state, ps PathState, instr *ssa.Call, newps []PathStat
 	return append(newps, ps)
 }
 
-func handleRuntimeUnlock(s *state, ps PathState, instr *ssa.Call, newps []PathState) []PathState {
-	lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
+func handleRuntimeUnlock(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
+	lock := s.pta.Queries[instr.(*ssa.Call).Call.Args[0]].PointsTo()
 	// TODO: Warn on unlock of unlocked lock.
 	ps.lockSet = ps.lockSet.Minus(lock)
 	return append(newps, ps)
 }
 
-func handleRuntimeCasgstatus(s *state, ps PathState, instr *ssa.Call, newps []PathState) []PathState {
+func handleRuntimeCasgstatus(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
 	// Equivalent to acquiring and releasing _Gscan.
 	gscan := NewLockSet(ps.lockSet.sp).PlusLabel("_Gscan", s.stack)
 	s.lockOrder.Add(ps.lockSet, gscan, s.stack)
 	return append(newps, ps)
 }
 
-func handleRuntimeCastogscanstatus(s *state, ps PathState, instr *ssa.Call, newps []PathState) []PathState {
+func handleRuntimeCastogscanstatus(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
 	// This is a conditional acquisition of _Gscan. _Gscan is
 	// acquired on the true branch and not acquired on the false
 	// branch. Either way it participates in the lock order.
@@ -75,14 +75,14 @@ func handleRuntimeCastogscanstatus(s *state, ps PathState, instr *ssa.Call, newp
 	psT, psF := ps, ps
 
 	psT.lockSet = psT.lockSet.PlusLabel("_Gscan", s.stack)
-	psT.vs = psT.vs.Extend(instr, DynConst{constant.MakeBool(true)})
+	psT.vs = psT.vs.Extend(instr.(ssa.Value), DynConst{constant.MakeBool(true)})
 
-	psF.vs = psF.vs.Extend(instr, DynConst{constant.MakeBool(false)})
+	psF.vs = psF.vs.Extend(instr.(ssa.Value), DynConst{constant.MakeBool(false)})
 
 	return append(newps, psT, psF)
 }
 
-func handleRuntimeCasfrom_Gscanstatus(s *state, ps PathState, instr *ssa.Call, newps []PathState) []PathState {
+func handleRuntimeCasfrom_Gscanstatus(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
 	// Unlock of _Gscan.
 	ps.lockSet = ps.lockSet.MinusLabel("_Gscan")
 	return append(newps, ps)

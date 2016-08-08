@@ -97,6 +97,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"go/types"
 	"io"
 	"log"
 	"math/big"
@@ -528,7 +529,8 @@ func rewriteStubs(f *ast.File) {
 }
 
 func rewriteRuntime(f *ast.File) {
-	// TODO: Rewrite new/make/etc to calls to built-ins.
+	// TODO: Do identifier resolution so I know I'm actually
+	// getting the runtime globals.
 	Rewrite(func(node ast.Node) ast.Node {
 		switch node := node.(type) {
 		case *ast.CallExpr:
@@ -607,11 +609,35 @@ func rewriteRuntime(f *ast.File) {
 }
 
 var fns struct {
+	// Locking functions.
 	lock, unlock *ssa.Function
+
+	// Allocation functions.
+	newobject, newarray, makemap, makechan *ssa.Function
+
+	// Slice functions.
+	growslice, slicecopy, slicestringcopy *ssa.Function
+
+	// Map functions.
+	mapaccess1, mapaccess2, mapassign1, mapdelete *ssa.Function
+
+	// Channel functions.
+	chansend1, closechan *ssa.Function
+
+	// Misc.
+	gopanic *ssa.Function
 }
 
 var runtimeFns = map[string]interface{}{
 	"lock": &fns.lock, "unlock": &fns.unlock,
+	"newobject": &fns.newobject, "newarray": &fns.newarray,
+	"makemap": &fns.makemap, "makechan": &fns.makechan,
+	"growslice": &fns.growslice, "slicecopy": &fns.slicecopy,
+	"slicestringcopy": &fns.slicestringcopy,
+	"mapaccess1":      &fns.mapaccess1, "mapaccess2": &fns.mapaccess2,
+	"mapassign1": &fns.mapassign1, "mapdelete": &fns.mapdelete,
+	"chansend1": &fns.chansend1, "closechan": &fns.closechan,
+	"gopanic": &fns.gopanic,
 }
 
 func lookupMembers(pkg *ssa.Package, out map[string]interface{}) {
@@ -894,14 +920,14 @@ type funcInfo struct {
 // an empty stack.
 type StackFrame struct {
 	parent *StackFrame
-	call   *ssa.Call
+	call   ssa.Instruction
 }
 
 var internedStackFrames = make(map[StackFrame]*StackFrame)
 
 // Flatten turns sf into a list of calls where the outer-most call is
 // first.
-func (sf *StackFrame) Flatten(into []*ssa.Call) []*ssa.Call {
+func (sf *StackFrame) Flatten(into []ssa.Instruction) []ssa.Instruction {
 	if sf == nil {
 		if into == nil {
 			return nil
@@ -911,8 +937,10 @@ func (sf *StackFrame) Flatten(into []*ssa.Call) []*ssa.Call {
 	return append(sf.parent.Flatten(into), sf.call)
 }
 
-// Extend returns a new StackFrame that extends sf with call.
-func (sf *StackFrame) Extend(call *ssa.Call) *StackFrame {
+// Extend returns a new StackFrame that extends sf with call. call is
+// typically an *ssa.Call, but other instructions can invoke runtime
+// function calls as well.
+func (sf *StackFrame) Extend(call ssa.Instruction) *StackFrame {
 	return &StackFrame{sf, call}
 }
 
@@ -936,7 +964,7 @@ func (sf *StackFrame) Intern() *StackFrame {
 // TrimCommonPrefix eliminates the outermost frames that sf and other
 // have in common and returns their distinct suffixes.
 func (sf *StackFrame) TrimCommonPrefix(other *StackFrame) (*StackFrame, *StackFrame) {
-	var buf [64]*ssa.Call
+	var buf [64]ssa.Instruction
 	f1 := sf.Flatten(buf[:])
 	f2 := other.Flatten(f1[len(f1):cap(f1)])
 
@@ -1000,6 +1028,27 @@ func (s *state) addRoot(fn *ssa.Function) {
 // invoke. It returns nil for built-in functions or if pointer
 // analysis failed.
 func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
+	if builtin, ok := call.Common().Value.(*ssa.Builtin); ok {
+		// TODO: cap, len for map and channel
+		switch builtin.Name() {
+		case "append":
+			return []*ssa.Function{fns.growslice}
+		case "close":
+			return []*ssa.Function{fns.closechan}
+		case "copy":
+			arg0 := builtin.Type().(*types.Signature).Params().At(0).Type().Underlying()
+			if b, ok := arg0.(*types.Basic); ok && b.Kind() == types.String {
+				return []*ssa.Function{fns.slicestringcopy}
+			}
+			return []*ssa.Function{fns.slicecopy}
+		case "delete":
+			return []*ssa.Function{fns.mapdelete}
+		}
+
+		// Ignore others.
+		return nil
+	}
+
 	if fn := call.Common().StaticCallee(); fn != nil {
 		return []*ssa.Function{fn}
 	} else if cnode := s.cg.Nodes[call.Parent()]; cnode != nil {
@@ -1012,13 +1061,6 @@ func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
 			callees = append(callees, o.Callee.Func)
 		}
 		return callees
-	}
-	if _, ok := call.Common().Value.(*ssa.Builtin); ok {
-		// Ignore these.
-		//
-		// TODO: Some of these we should turn into calls to
-		// real runtime functions.
-		return nil
 	}
 
 	s.warnl(call.Pos(), "no call graph for %v", call)
@@ -1137,14 +1179,14 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	}
 
 	// Resolve function cycles by returning an empty set of
-	// locksets.
+	// locksets, which terminates this code path.
 	//
 	// TODO: RacerX detects cycles *without* regard to the entry
 	// lock set. We could do that, but it doesn't seem to be an
 	// issue to include the lock set. However, since we have the
 	// lock set, maybe if we have a cycle with a non-empty lock
 	// set we should report a self-deadlock.
-	fInfo.exitLockSets[locksKey] = nil
+	fInfo.exitLockSets[locksKey] = &LockSetSet{}
 
 	blockCache := NewPathStateSet()
 	enterPathState := PathState{f.Blocks[0], locks, nil, nil}
@@ -1324,6 +1366,24 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 	pathStates := NewPathStateSet()
 	pathStates.Add(enterPathState)
 
+	doCall := func(instr ssa.Instruction, fns []*ssa.Function) {
+		s.stack = s.stack.Extend(instr)
+		pathStates = pathStates.FlatMap(func(ps PathState, newps []PathState) []PathState {
+			for _, fn := range fns {
+				if handler, ok := callHandlers[fn.String()]; ok {
+					newps = handler(s, ps, instr, newps)
+				} else {
+					for _, ls := range s.walkFunction(fn, ps.lockSet).M {
+						ps.lockSet = ls
+						newps = append(newps, ps)
+					}
+				}
+			}
+			return newps
+		})
+		s.stack = s.stack.parent
+	}
+
 	// For each instruction, compute the effect of that
 	// instruction on all possible path states at that point.
 	var ifCond ssa.Value
@@ -1352,21 +1412,49 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 				// locksets.
 				break
 			}
-			s.stack = s.stack.Extend(instr)
-			pathStates = pathStates.FlatMap(func(ps PathState, newps []PathState) []PathState {
-				for _, o := range outs {
-					if handler, ok := callHandlers[o.String()]; ok {
-						newps = handler(s, ps, instr, newps)
-					} else {
-						for _, ls := range s.walkFunction(o, ps.lockSet).M {
-							ps.lockSet = ls
-							newps = append(newps, ps)
-						}
-					}
-				}
-				return newps
-			})
-			s.stack = s.stack.parent
+			doCall(instr, outs)
+
+		// TODO: runtime calls for ssa.ChangeInterface,
+		// ssa.Convert, ssa.Defer, ssa.MakeInterface,
+		// ssa.Next, ssa.Range, ssa.Select, ssa.TypeAssert.
+
+		// Unfortunately, we can't turn ssa.Alloc into a
+		// newobject call because ssa turns any variable
+		// captured by a closure into an Alloc. There's no way
+		// to tell if it was actually a new() expression or
+		// not.
+		// case *ssa.Alloc:
+		// 	if instr.Heap {
+		// 		doCall(instr, []*ssa.Function{fns.newobject})
+		// 	}
+
+		case *ssa.Lookup:
+			if _, ok := instr.X.Type().Underlying().(*types.Map); !ok {
+				break
+			}
+			if instr.CommaOk {
+				doCall(instr, []*ssa.Function{fns.mapaccess2})
+			} else {
+				doCall(instr, []*ssa.Function{fns.mapaccess1})
+			}
+
+		case *ssa.MakeChan:
+			doCall(instr, []*ssa.Function{fns.makechan})
+
+		case *ssa.MakeMap:
+			doCall(instr, []*ssa.Function{fns.makemap})
+
+		case *ssa.MakeSlice:
+			doCall(instr, []*ssa.Function{fns.newarray})
+
+		case *ssa.MapUpdate:
+			doCall(instr, []*ssa.Function{fns.mapassign1})
+
+		case *ssa.Panic:
+			doCall(instr, []*ssa.Function{fns.gopanic})
+
+		case *ssa.Send:
+			doCall(instr, []*ssa.Function{fns.chansend1})
 
 		case *ssa.Go:
 			for _, o := range s.callees(instr) {

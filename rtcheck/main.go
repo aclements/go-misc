@@ -1119,7 +1119,7 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	// set we should report a self-deadlock.
 	fInfo.exitLockSets[locksKey] = nil
 
-	blockCache := make(blockCache)
+	blockCache := NewPathStateSet()
 	enterPathState := PathState{f.Blocks[0], locks, nil, nil}
 	exitLockSets := NewLockSetSet()
 	s.walkBlock(blockCache, enterPathState, exitLockSets)
@@ -1129,24 +1129,6 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 		s.debugTree.Appendf("\nexit: %v", exitLockSets)
 	}
 	return exitLockSets
-}
-
-// A blockCache is the set of visited states within a function. If
-// walkBlock returns to the same block with the same state, it can
-// terminate that path of execution.
-type blockCache map[blockCacheKey][]blockCacheKey2
-
-// blockCacheKey is the hashable part of the block cache key. This is
-// used to quickly narrow down to a small set of blockCacheKey2 values
-// that must be directly compared for equality.
-type blockCacheKey struct {
-	block   *ssa.BasicBlock
-	lockset LockSetKey
-}
-
-// blockCacheKey2 is the un-hashable part of the block cache key.
-type blockCacheKey2 struct {
-	vs *ValState
 }
 
 // PathState is the state during execution of a particular function.
@@ -1165,6 +1147,8 @@ type pathStateKey struct {
 // HashKey returns a key such that ps1.Equal(ps2) implies
 // ps1.HashKey() == ps2.HashKey().
 func (ps *PathState) HashKey() pathStateKey {
+	// Note that PathStateSet.Contains depends on this capturing
+	// everything except the stacks and value state.
 	return pathStateKey{ps.block, ps.lockSet.HashKey()}
 }
 
@@ -1197,6 +1181,21 @@ func (set *PathStateSet) Add(ps PathState) {
 		}
 	}
 	set.m[key] = append(slice, ps)
+}
+
+// Contains returns whether set contains ps and the number of
+// PathStates that differ only in value state and lock stacks.
+func (set *PathStateSet) Contains(ps PathState) (bool, int) {
+	// The "similar" count depends on the implementation of
+	// PathState.HashKey.
+	key := ps.HashKey()
+	slice := set.m[key]
+	for i := range slice {
+		if slice[i].Equal(&ps) {
+			return true, len(slice)
+		}
+	}
+	return false, len(slice)
 }
 
 // MapInPlace applies f to each PathState in set and replaces that
@@ -1255,10 +1254,18 @@ func (set *PathStateSet) FlatMap(f func(ps PathState, scatch []PathState) []Path
 // walkBlock visits a block and all blocks reachable from it, starting
 // from the path state enterPathState. When walkBlock reaches the
 // return point of the function, it adds the possible lock sets at
-// that point to exitLockSets.
-func (s *state) walkBlock(blockCache blockCache, enterPathState PathState, exitLockSets *LockSetSet) {
+// that point to exitLockSets. blockCache is the set of already
+// visited path states within this function as of the beginning of
+// visited blocks.
+func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, exitLockSets *LockSetSet) {
 	b := enterPathState.block
 	f := b.Parent()
+	// Check the values that are live at this
+	// block. Note that the live set includes phis
+	// at the beginning of this block if they
+	// participate in control flow decisions, so
+	// we'll pick up any phi values assigned by
+	// our called.
 	enterPathState.mask = s.fns[f].ifDeps[b.Index]
 
 	debugTree := s.fns[f].debugTree
@@ -1270,38 +1277,21 @@ func (s *state) walkBlock(blockCache blockCache, enterPathState PathState, exitL
 		defer debugTree.Pop()
 	}
 
-	bck := blockCacheKey{b, enterPathState.lockSet.Key()}
-	if bck2s, ok := blockCache[bck]; ok {
-		for _, bck2 := range bck2s {
-			// Check the values that are live at this
-			// block. Note that the live set includes phis
-			// at the beginning of this block if they
-			// participate in control flow decisions, so
-			// we'll pick up any phi values assigned by
-			// our called.
-			if bck2.vs.EqualAt(enterPathState.vs, enterPathState.mask) {
-				// Terminate recursion. Some other
-				// path has already visited here with
-				// this lock set and value state.
-				if debugTree != nil {
-					debugTree.Leaf("cached")
-				}
-				return
-			}
+	if cached, similar := blockCache.Contains(enterPathState); cached {
+		// Terminate recursion. Some other path has already
+		// visited here with this lock set and value state.
+		if debugTree != nil {
+			debugTree.Leaf("cached")
 		}
-		if len(bck2s) > 10 {
-			s.warnl(blockPos(b), "too many states, trimming path (block %d)", b.Index)
-			// for _, bck2 := range bck2s {
-			// 	log.Print("next ", f.Name(), ":", b.Index)
-			// 	bck2.vs.WriteTo(os.Stderr)
-			// }
-			if debugTree != nil {
-				debugTree.Leaf("too many states")
-			}
-			return
+		return
+	} else if similar > 10 {
+		s.warnl(blockPos(b), "too many states, trimming path (block %d)", b.Index)
+		if debugTree != nil {
+			debugTree.Leaf("too many states")
 		}
+		return
 	}
-	blockCache[bck] = append(blockCache[bck], blockCacheKey2{enterPathState.vs})
+	blockCache.Add(enterPathState)
 
 	// Upon block entry there's just the one entry path state.
 	pathStates := NewPathStateSet()

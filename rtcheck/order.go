@@ -184,7 +184,7 @@ func (lo *LockOrder) writeToDot(w io.Writer) map[lockOrderEdge]string {
 		var props string
 		if _, ok := cycleEdges[edge]; ok {
 			width := 1 + 6*float64(len(stacks))/float64(maxStack)
-			props = fmt.Sprintf(",label=%d,penwidth=%f,color=red", len(stacks), width)
+			props = fmt.Sprintf(",label=%d,penwidth=%f,color=red,weight=2", len(stacks), width)
 		}
 		id := fmt.Sprintf("edge%d-%d", edge.fromId, edge.toId)
 		edgeIds[edge] = id

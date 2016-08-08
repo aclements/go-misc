@@ -538,7 +538,6 @@ func rewriteRuntime(f *ast.File) {
 			}
 			switch id.Name {
 			case "systemstack":
-				// TODO: Clean up func() { x }() -> { x }
 				return &ast.CallExpr{Fun: node.Args[0], Args: []ast.Expr{}}
 			case "mcall":
 				return &ast.CallExpr{Fun: node.Args[0], Args: []ast.Expr{&ast.Ident{Name: "nil"}}}
@@ -559,6 +558,22 @@ func rewriteRuntime(f *ast.File) {
 					Args: []ast.Expr{node.Args[0]},
 				}
 			}
+
+		case *ast.ExprStmt:
+			// Rewrite systemstack(func() { x }) -> { x }
+			expr, ok := node.X.(*ast.CallExpr)
+			if !ok {
+				break
+			}
+			id, ok := expr.Fun.(*ast.Ident)
+			if !ok || id.Name != "systemstack" {
+				break
+			}
+			arg, ok := expr.Args[0].(*ast.FuncLit)
+			if !ok {
+				break
+			}
+			return arg.Body
 
 		case *ast.FuncDecl:
 			// TODO: Some functions are just too hairy for

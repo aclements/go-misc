@@ -173,6 +173,7 @@ func main() {
 	prog := ssautil.CreateProgram(lprog, 0)
 	prog.Build()
 	runtimePkg := prog.ImportedPackage("runtime")
+	lookupMembers(runtimePkg, runtimeFns)
 
 	// TODO: Teach it that you can jump to sigprof at any point?
 	//
@@ -590,11 +591,25 @@ func rewriteRuntime(f *ast.File) {
 	}, f)
 }
 
-var lockFn, unlockFn *ssa.Function
+var fns struct {
+	lock, unlock *ssa.Function
+}
+
+var runtimeFns = map[string]interface{}{
+	"lock": &fns.lock, "unlock": &fns.unlock,
+}
+
+func lookupMembers(pkg *ssa.Package, out map[string]interface{}) {
+	for name, ptr := range out {
+		member, ok := pkg.Members[name]
+		if !ok {
+			log.Fatal("%s.%s not found", pkg, name)
+		}
+		reflect.ValueOf(ptr).Elem().Set(reflect.ValueOf(member))
+	}
+}
 
 func registerLockQueries(pkg *ssa.Package, ptrConfig *pointer.Config) {
-	lockFn = pkg.Members["lock"].(*ssa.Function)
-	unlockFn = pkg.Members["unlock"].(*ssa.Function)
 	for _, member := range pkg.Members {
 		fn, ok := member.(*ssa.Function)
 		if !ok {
@@ -607,7 +622,7 @@ func registerLockQueries(pkg *ssa.Package, ptrConfig *pointer.Config) {
 					continue
 				}
 				target := call.Common().StaticCallee()
-				if target == lockFn || target == unlockFn {
+				if target == fns.lock || target == fns.unlock {
 					ptrConfig.AddQuery(call.Common().Args[0])
 				}
 			}
@@ -1189,7 +1204,7 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 			s.stack = s.stack.Extend(instr)
 			for _, o := range outs {
 				// TODO: _Gscan locks, misc locks, semaphores
-				if o == lockFn {
+				if o == fns.lock {
 					lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
 					for _, ls := range lockSets.M {
 						s.lockOrder.Add(ls, lock, s.stack)
@@ -1207,7 +1222,7 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 							nextLockSets.Add(ls2)
 						}
 					}
-				} else if o == unlockFn {
+				} else if o == fns.unlock {
 					lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
 					for _, ls := range lockSets.M {
 						// TODO: Warn on

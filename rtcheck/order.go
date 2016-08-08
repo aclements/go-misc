@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"golang.org/x/tools/go/pointer"
 	"golang.org/x/tools/go/ssa"
 )
 
@@ -53,7 +52,7 @@ func NewLockOrder(fset *token.FileSet) *LockOrder {
 // Add adds lock edges to the lock order, given that the locks in
 // locked are currently held and the locks in locking are being
 // acquired at stack.
-func (lo *LockOrder) Add(locked *LockSet, locking pointer.PointsToSet, stack *StackFrame) {
+func (lo *LockOrder) Add(locked *LockSet, locking *LockSet, stack *StackFrame) {
 	lo.cycles = nil
 	if lo.sp == nil {
 		lo.sp = locked.sp
@@ -61,11 +60,10 @@ func (lo *LockOrder) Add(locked *LockSet, locking pointer.PointsToSet, stack *St
 		panic("locks come from a different StringSpace")
 	}
 
-	newls := NewLockSet(lo.sp).Plus(locking, stack) // TODO: Unnecessary
 	for i := 0; i < locked.bits.BitLen(); i++ {
 		if locked.bits.Bit(i) != 0 {
-			for j := 0; j < newls.bits.BitLen(); j++ {
-				if newls.bits.Bit(j) != 0 {
+			for j := 0; j < locking.bits.BitLen(); j++ {
+				if locking.bits.Bit(j) != 0 {
 					// Trim the common prefix of
 					// the two stacks, since we
 					// only care about how we got

@@ -737,6 +737,18 @@ func (set *LockSet) Plus(s pointer.PointsToSet, stack *StackFrame) *LockSet {
 	return out
 }
 
+// PlusLabel is like Plus, but for a specific string lock label.
+func (set *LockSet) PlusLabel(label string, stack *StackFrame) *LockSet {
+	id := set.sp.Intern(label)
+	if set.bits.Bit(id) != 0 {
+		return set
+	}
+	out := set.clone()
+	out.bits.SetBit(&out.bits, id, 1)
+	out.stacks[id] = stack
+	return out
+}
+
 // Union returns a LockSet that is the union of set and o. If both set
 // and o contain the same lock, the stack from set is preferred.
 func (set *LockSet) Union(o *LockSet) *LockSet {
@@ -1328,31 +1340,8 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 			s.stack = s.stack.Extend(instr)
 			pathStates = pathStates.FlatMap(func(ps PathState, newps []PathState) []PathState {
 				for _, o := range outs {
-					// TODO: _Gscan locks, misc locks, semaphores
-					if o == fns.lock {
-						lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
-						s.lockOrder.Add(ps.lockSet, lock, s.stack)
-						ls2 := ps.lockSet.Plus(lock, s.stack)
-						// If we
-						// self-deadlocked,
-						// terminate this
-						// path.
-						//
-						// TODO: This is only
-						// sound if we know
-						// it's the same lock
-						// *instance*.
-						if ps.lockSet != ls2 {
-							ps.lockSet = ls2
-							newps = append(newps, ps)
-						}
-					} else if o == fns.unlock {
-						lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
-						// TODO: Warn on
-						// unlock of unlocked
-						// lock.
-						ps.lockSet = ps.lockSet.Minus(lock)
-						newps = append(newps, ps)
+					if handler, ok := callHandlers[o.String()]; ok {
+						newps = handler(s, ps, instr, newps)
 					} else {
 						for _, ls := range s.walkFunction(o, ps.lockSet).M {
 							ps.lockSet = ls

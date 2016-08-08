@@ -4,6 +4,20 @@
 
 // Command rtcheck performs static analysis of the Go runtime.
 //
+// Note: Currently this requires a small modification to
+// golang.org/x/tools/go/pointer:
+//
+//     --- a/go/pointer/intrinsics.go
+//     +++ b/go/pointer/intrinsics.go
+//     @@ -180,7 +180,6 @@ func (a *analysis) findIntrinsic(fn *ssa.Function) intrinsic {
+//      			// Ignore "runtime" (except SetFinalizer):
+//      			// it has few interesting effects on aliasing
+//      			// and is full of unsafe code we can't analyze.
+//     -			impl = ext۰NoEffect
+//      		}
+//
+//      		a.intrinsics[fn] = impl
+//
 // rtcheck currently implements one analysis:
 //
 // Deadlock detection

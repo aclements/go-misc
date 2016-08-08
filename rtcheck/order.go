@@ -156,6 +156,9 @@ func (lo *LockOrder) WriteToDot(w io.Writer) {
 }
 
 func (lo *LockOrder) writeToDot(w io.Writer) map[lockOrderEdge]string {
+	// TODO: Compute the transitive reduction (of the SCC
+	// condensation, I guess) to reduce noise.
+
 	// Find cycles to highlight edges.
 	cycles := lo.FindCycles()
 	cycleEdges := map[lockOrderEdge]struct{}{}

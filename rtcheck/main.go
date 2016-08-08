@@ -1187,6 +1187,11 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 						// self-deadlocked,
 						// terminate this
 						// path.
+						//
+						// TODO: This is only
+						// sound if we know
+						// it's the same lock
+						// *instance*.
 						if ls != ls2 {
 							nextLockSets.Add(ls2)
 						}

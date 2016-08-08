@@ -20,7 +20,9 @@ import (
 // TODO: This doesn't account for control flow dependencies. For
 // example if a value depends on a phi, this will add all of the
 // values that go into that phi, but not the values necessary to
-// determine the control flow into that phi.
+// determine the control flow into that phi. In effect, the phi has an
+// implicit dependency on which predecessor it came from, and we don't
+// model that.
 func livenessFor(f *ssa.Function, vals []ssa.Instruction) (deps []map[ssa.Instruction]struct{}) {
 	deps = make([]map[ssa.Instruction]struct{}, len(f.Blocks))
 

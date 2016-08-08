@@ -692,6 +692,29 @@ func (set *LockSet) Key() LockSetKey {
 	return LockSetKey(k)
 }
 
+// HashKey returns a key such that set1.Equal(set2) implies
+// set1.HashKey() == set2.HashKey().
+func (set *LockSet) HashKey() string {
+	return set.bits.Text(16)
+}
+
+// Equal returns whether set and set2 contain the same locks acquired
+// at the same stacks.
+func (set *LockSet) Equal(set2 *LockSet) bool {
+	if set.sp != set2.sp {
+		return false
+	}
+	if set.bits.Cmp(&set2.bits) != 0 {
+		return false
+	}
+	for k, v := range set.stacks {
+		if set2.stacks[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
 // Plus returns a LockSet that extends set with all locks in s,
 // acquired at stack. If a lock in s is already in set, it does not
 // get re-added. If all locks in s are in set, it returns set.
@@ -1097,8 +1120,9 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	fInfo.exitLockSets[locksKey] = nil
 
 	blockCache := make(blockCache)
+	enterPathState := PathState{f.Blocks[0], locks, nil, nil}
 	exitLockSets := NewLockSetSet()
-	s.walkBlock(f.Blocks[0], blockCache, nil, locks, exitLockSets)
+	s.walkBlock(blockCache, enterPathState, exitLockSets)
 	fInfo.exitLockSets[locksKey] = exitLockSets
 	//log.Printf("%s: %s -> %s", f.Name(), locks, exitLockSets)
 	if s.debugging {
@@ -1125,22 +1149,128 @@ type blockCacheKey2 struct {
 	vs *ValState
 }
 
-// walkBlock visits b and all blocks reachable from b. The value state
-// and lock set upon entry to b are vs and enterLockSet, respectively.
-// When walkBlock reaches the return point of the function, it adds
-// the possible lock sets at that point to exitLockSets.
-func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState, enterLockSet *LockSet, exitLockSets *LockSetSet) {
+// PathState is the state during execution of a particular function.
+type PathState struct {
+	block   *ssa.BasicBlock
+	lockSet *LockSet
+	vs      *ValState
+	mask    map[ssa.Instruction]struct{}
+}
+
+type pathStateKey struct {
+	block   *ssa.BasicBlock
+	lockSet string
+}
+
+// HashKey returns a key such that ps1.Equal(ps2) implies
+// ps1.HashKey() == ps2.HashKey().
+func (ps *PathState) HashKey() pathStateKey {
+	return pathStateKey{ps.block, ps.lockSet.HashKey()}
+}
+
+// Equal returns whether ps and ps2 have represent the same program
+// state.
+func (ps *PathState) Equal(ps2 *PathState) bool {
+	// ps.block == ps2.block implies ps.mask == ps2.mask, so this
+	// is symmetric. Maybe we should just keep pre-masked
+	// ValStates.
+	return ps.block == ps2.block && ps.lockSet.Equal(ps2.lockSet) && ps.vs.EqualAt(ps2.vs, ps.mask)
+}
+
+// PathStateSet is a mutable set of PathStates.
+type PathStateSet struct {
+	m map[pathStateKey][]PathState
+}
+
+// NewPathStateSet returns a new, empty PathStateSet.
+func NewPathStateSet() *PathStateSet {
+	return &PathStateSet{make(map[pathStateKey][]PathState)}
+}
+
+// Add adds PathState ps to set.
+func (set *PathStateSet) Add(ps PathState) {
+	key := ps.HashKey()
+	slice := set.m[key]
+	for i := range slice {
+		if slice[i].Equal(&ps) {
+			return
+		}
+	}
+	set.m[key] = append(slice, ps)
+}
+
+// MapInPlace applies f to each PathState in set and replaces that
+// PathState with f's result. This is optimized for the case where f
+// returns the same PathState.
+func (set *PathStateSet) MapInPlace(f func(ps PathState) PathState) {
+	var toAdd []PathState
+	for hashKey, slice := range set.m {
+		for i := 0; i < len(slice); i++ {
+			ps2 := f(slice[i])
+			if slice[i].Equal(&ps2) {
+				continue
+			}
+			// Remove ps from the set and queue ps2 to add.
+			slice[i] = slice[len(slice)-1]
+			slice = slice[:len(slice)-1]
+			if len(slice) == 0 {
+				delete(set.m, hashKey)
+			} else {
+				set.m[hashKey] = slice
+			}
+			toAdd = append(toAdd, ps2)
+		}
+	}
+	for _, ps := range toAdd {
+		set.Add(ps)
+	}
+}
+
+// ForEach applies f to each PathState in set.
+func (set *PathStateSet) ForEach(f func(ps PathState)) {
+	for _, slice := range set.m {
+		for i := range slice {
+			f(slice[i])
+		}
+	}
+}
+
+// FlatMap applies f to each PathState in set and returns a new
+// PathStateSet consisting of the union of f's results. f may use
+// scratch as temporary space and may return it; this will always be a
+// slice with length 0.
+func (set *PathStateSet) FlatMap(f func(ps PathState, scatch []PathState) []PathState) *PathStateSet {
+	var scratch [16]PathState
+	out := NewPathStateSet()
+	for _, slice := range set.m {
+		for _, ps := range slice {
+			for _, nps := range f(ps, scratch[:0]) {
+				out.Add(nps)
+			}
+		}
+	}
+	return out
+}
+
+// walkBlock visits a block and all blocks reachable from it, starting
+// from the path state enterPathState. When walkBlock reaches the
+// return point of the function, it adds the possible lock sets at
+// that point to exitLockSets.
+func (s *state) walkBlock(blockCache blockCache, enterPathState PathState, exitLockSets *LockSetSet) {
+	b := enterPathState.block
 	f := b.Parent()
+	enterPathState.mask = s.fns[f].ifDeps[b.Index]
+
 	debugTree := s.fns[f].debugTree
 	if debugTree != nil {
 		var buf bytes.Buffer
-		fmt.Fprintf(&buf, "block %v\nlockset %v\nvalue state:\n", b.Index, enterLockSet)
-		vs.WriteTo(&buf)
+		fmt.Fprintf(&buf, "block %v\nlockset %v\nvalue state:\n", b.Index, enterPathState.lockSet)
+		enterPathState.vs.WriteTo(&buf)
 		debugTree.Push(buf.String())
 		defer debugTree.Pop()
 	}
 
-	bck := blockCacheKey{b, enterLockSet.Key()}
+	bck := blockCacheKey{b, enterPathState.lockSet.Key()}
 	if bck2s, ok := blockCache[bck]; ok {
 		for _, bck2 := range bck2s {
 			// Check the values that are live at this
@@ -1149,7 +1279,7 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 			// participate in control flow decisions, so
 			// we'll pick up any phi values assigned by
 			// our called.
-			if bck2.vs.EqualAt(vs, s.fns[f].ifDeps[b.Index]) {
+			if bck2.vs.EqualAt(enterPathState.vs, enterPathState.mask) {
 				// Terminate recursion. Some other
 				// path has already visited here with
 				// this lock set and value state.
@@ -1171,17 +1301,22 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 			return
 		}
 	}
-	blockCache[bck] = append(blockCache[bck], blockCacheKey2{vs})
+	blockCache[bck] = append(blockCache[bck], blockCacheKey2{enterPathState.vs})
+
+	// Upon block entry there's just the one entry path state.
+	pathStates := NewPathStateSet()
+	pathStates.Add(enterPathState)
 
 	// For each instruction, compute the effect of that
-	// instruction on all possible lock sets at that point.
-	lockSets := NewLockSetSet()
-	lockSets.Add(enterLockSet)
+	// instruction on all possible path states at that point.
 	var ifCond ssa.Value
 	for _, instr := range b.Instrs {
 		// Update value state with the effect of this
 		// instruction.
-		vs = vs.Do(instr)
+		pathStates.MapInPlace(func(ps PathState) PathState {
+			ps.vs = ps.vs.Do(instr)
+			return ps
+		})
 
 		switch instr := instr.(type) {
 		case *ssa.If:
@@ -1200,15 +1335,14 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 				// locksets.
 				break
 			}
-			nextLockSets := NewLockSetSet()
 			s.stack = s.stack.Extend(instr)
-			for _, o := range outs {
-				// TODO: _Gscan locks, misc locks, semaphores
-				if o == fns.lock {
-					lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
-					for _, ls := range lockSets.M {
-						s.lockOrder.Add(ls, lock, s.stack)
-						ls2 := ls.Plus(lock, s.stack)
+			pathStates = pathStates.FlatMap(func(ps PathState, newps []PathState) []PathState {
+				for _, o := range outs {
+					// TODO: _Gscan locks, misc locks, semaphores
+					if o == fns.lock {
+						lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
+						s.lockOrder.Add(ps.lockSet, lock, s.stack)
+						ls2 := ps.lockSet.Plus(lock, s.stack)
 						// If we
 						// self-deadlocked,
 						// terminate this
@@ -1218,27 +1352,27 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 						// sound if we know
 						// it's the same lock
 						// *instance*.
-						if ls != ls2 {
-							nextLockSets.Add(ls2)
+						if ps.lockSet != ls2 {
+							ps.lockSet = ls2
+							newps = append(newps, ps)
 						}
-					}
-				} else if o == fns.unlock {
-					lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
-					for _, ls := range lockSets.M {
+					} else if o == fns.unlock {
+						lock := s.pta.Queries[instr.Call.Args[0]].PointsTo()
 						// TODO: Warn on
 						// unlock of unlocked
 						// lock.
-						ls = ls.Minus(lock)
-						nextLockSets.Add(ls)
-					}
-				} else {
-					for _, ls := range lockSets.M {
-						nextLockSets.Union(s.walkFunction(o, ls))
+						ps.lockSet = ps.lockSet.Minus(lock)
+						newps = append(newps, ps)
+					} else {
+						for _, ls := range s.walkFunction(o, ps.lockSet).M {
+							ps.lockSet = ls
+							newps = append(newps, ps)
+						}
 					}
 				}
-			}
+				return newps
+			})
 			s.stack = s.stack.parent
-			lockSets = nextLockSets
 
 		case *ssa.Go:
 			for _, o := range s.callees(instr) {
@@ -1248,7 +1382,7 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 
 		case *ssa.Return:
 			// We've reached function exit. Add the
-			// current lock set to exitLockSets.
+			// current lock sets to exitLockSets.
 			//
 			// TODO: Handle defers.
 
@@ -1259,15 +1393,15 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 			// traceReleaseBuffer releases
 			// runtime.trace.bufLock.
 			if f.Name() == "traceReleaseBuffer" {
-				nextLockSets := NewLockSetSet()
-				for _, ls := range lockSets.M {
-					ls = ls.MinusLabel("runtime.trace.bufLock")
-					nextLockSets.Add(ls)
-				}
-				lockSets = nextLockSets
+				pathStates.MapInPlace(func(ps PathState) PathState {
+					ps.lockSet = ps.lockSet.MinusLabel("runtime.trace.bufLock")
+					return ps
+				})
 			}
 
-			exitLockSets.Union(lockSets)
+			pathStates.ForEach(func(ps PathState) {
+				exitLockSets.Add(ps.lockSet)
+			})
 		}
 	}
 
@@ -1290,37 +1424,40 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 	}
 	_ = exitPos
 
-	// If this is an "if", see if we have enough information to
-	// determine its direction.
-	succs := b.Succs
-	if ifCond != nil {
-		x := vs.Get(ifCond)
-		if x != nil {
-			//log.Printf("determined control flow at %s: %v", s.fset.Position(exitPos(b)), x)
-			if constant.BoolVal(x.(DynConst).c) {
-				// Take true path.
-				succs = succs[:1]
-			} else {
-				// Take false path.
-				succs = succs[1:]
-			}
-		}
-	}
-	if len(lockSets.M) == 0 && debugTree != nil {
+	if len(pathStates.m) == 0 && debugTree != nil {
 		// This happens after functions that don't return.
-		debugTree.Leaf("no locksets")
+		debugTree.Leaf("no path states")
 	}
 
-	// Process block successors.
-	for _, succLockSet := range lockSets.M {
+	// Process successor blocks.
+	pathStates.ForEach(func(ps PathState) {
+		// If this is an "if", see if we have enough
+		// information to determine its direction.
+		succs := b.Succs
+		if ifCond != nil {
+			x := ps.vs.Get(ifCond)
+			if x != nil {
+				//log.Printf("determined control flow at %s: %v", s.fset.Position(exitPos(b)), x)
+				if constant.BoolVal(x.(DynConst).c) {
+					// Take true path.
+					succs = succs[:1]
+				} else {
+					// Take false path.
+					succs = succs[1:]
+				}
+			}
+		}
+
+		// Process block successors.
 		for i, b2 := range succs {
-			vs2 := vs
+			ps2 := ps
+			ps2.block = b2
 			if ifCond != nil {
 				// TODO: We could back-propagate this
 				// in simple cases, like when ifCond
 				// is a == BinOp. (And we could
 				// forward-propagate that! Hmm.)
-				vs2 = vs2.Extend(ifCond, DynConst{constant.MakeBool(i == 0)})
+				ps2.vs = ps2.vs.Extend(ifCond, DynConst{constant.MakeBool(i == 0)})
 			}
 
 			// Propagate values over phis at the beginning
@@ -1332,9 +1469,9 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 				}
 				for i, inval := range instr.Edges {
 					if b2.Preds[i] == b {
-						x := vs2.Get(inval)
+						x := ps2.vs.Get(inval)
 						if x != nil {
-							vs2 = vs2.Extend(instr, x)
+							ps2.vs = ps2.vs.Extend(instr, x)
 						}
 					}
 				}
@@ -1347,9 +1484,9 @@ func (s *state) walkBlock(b *ssa.BasicBlock, blockCache blockCache, vs *ValState
 					debugTree.SetEdge("F")
 				}
 			}
-			s.walkBlock(b2, blockCache, vs2, succLockSet, exitLockSets)
+			s.walkBlock(blockCache, ps2, exitLockSets)
 		}
-	}
+	})
 }
 
 // blockPos returns the best position it can for b.

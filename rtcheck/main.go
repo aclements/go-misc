@@ -571,8 +571,19 @@ func rewriteRuntime(f *ast.File) {
 						},
 					},
 				}
-			case "traceEvent":
+			case "traceEvent", "cgoContextPCs", "callCgoSymbolizer":
+				// TODO: A bunch of false positives
+				// come from callCgoSymbolizer and
+				// cgoContextPCs, which dynamically
+				// call either cgocall or asmcgocall
+				// depending on whether we're on the
+				// system stack. We don't flow enough
+				// information through to tell, so we
+				// assume it can always call cgocall,
+				// which leads to all sorts of bad
+				// lock edges.
 				node.Body = &ast.BlockStmt{}
+
 			}
 		}
 		return node

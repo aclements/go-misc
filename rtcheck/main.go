@@ -970,6 +970,14 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 		// actually affect locking and only track those. Right
 		// now we hit a lot of simple increment loops that
 		// cause path aborts, but don't involve any locking.
+		// Find all of the branches that could lead to a
+		// lock/unlock (the may-precede set) and eliminate
+		// those where both directions will always lead to the
+		// lock/unlock anyway (where the lock/unlock is in the
+		// must-succeed set). This can be answered with the
+		// post-dominator tree. This is basically the same
+		// computation we need to propagate liveness over
+		// control flow.
 		var ifInstrs []ssa.Instruction
 		for _, b := range f.Blocks {
 			if len(b.Instrs) == 0 {

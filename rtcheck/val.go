@@ -55,11 +55,15 @@ func (vs *ValState) Get(val ssa.Value) DynValue {
 }
 
 // Extend returns a new ValState that is like vs, but with bind bound
-// to dynamic value val. Extend is a no-op if called with a pure
-// ssa.Value.
+// to dynamic value val. If dyn is dynUnknown, Extend unbinds val.
+// Extend is a no-op if called with a pure ssa.Value.
 func (vs *ValState) Extend(val ssa.Value, dyn DynValue) *ValState {
 	if _, ok := dyn.(dynUnknown); ok {
-		return vs
+		// "Unbind" val.
+		if vs.Get(val) == nil {
+			return vs
+		}
+		dyn = nil
 	}
 	// We only care about binding instruction values.
 	instr, ok := val.(ssa.Instruction)
@@ -109,6 +113,12 @@ func (vs *ValState) EqualAt(o *ValState, at map[ssa.Instruction]struct{}) bool {
 			}
 			if _, ok := out[vs.bind]; !ok {
 				out[vs.bind] = vs.val
+			}
+		}
+		// Eliminate unbound values from out.
+		for k, v := range out {
+			if v == nil {
+				delete(out, k)
 			}
 		}
 		return out

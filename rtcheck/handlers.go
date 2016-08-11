@@ -6,6 +6,7 @@ package main
 
 import (
 	"go/constant"
+	"log"
 
 	"golang.org/x/tools/go/ssa"
 )
@@ -20,11 +21,17 @@ type callHandler func(s *state, ps PathState, instr ssa.Instruction, newps []Pat
 // callHandlers maps from function names (the result of
 // ssa.Function.String()) to handlers for special functions.
 var callHandlers = map[string]callHandler{
-	"runtime.lock":                handleRuntimeLock,
-	"runtime.unlock":              handleRuntimeUnlock,
+	"runtime.lock":   handleRuntimeLock,
+	"runtime.unlock": handleRuntimeUnlock,
+
 	"runtime.casgstatus":          handleRuntimeCasgstatus,
 	"runtime.castogscanstatus":    handleRuntimeCastogscanstatus,
 	"runtime.casfrom_Gscanstatus": handleRuntimeCasfrom_Gscanstatus,
+
+	"runtime.getg":                    handleRuntimeGetg,
+	"runtime.acquirem":                handleRuntimeAcquirem,
+	"runtime.rtcheck۰presystemstack":  handleRuntimePresystemstack,
+	"runtime.rtcheck۰postsystemstack": handleRuntimePostsystemstack,
 
 	// restartg does a conditional unlock of _Gscan, but it's hard
 	// to track that condition. In practice, it always does the
@@ -85,5 +92,44 @@ func handleRuntimeCastogscanstatus(s *state, ps PathState, instr ssa.Instruction
 func handleRuntimeCasfrom_Gscanstatus(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
 	// Unlock of _Gscan.
 	ps.lockSet = ps.lockSet.MinusLabel("_Gscan")
+	return append(newps, ps)
+}
+
+func handleRuntimeGetg(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
+	val := ps.vs.GetHeap(s.heap.curG)
+	if val == nil {
+		log.Fatal("failed to determine current G")
+	}
+	ps.vs = ps.vs.Extend(instr.(ssa.Value), val)
+	return append(newps, ps)
+}
+
+func handleRuntimeAcquirem(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
+	// TODO: Update m.locks.
+	ps.vs = ps.vs.Extend(instr.(ssa.Value), DynHeapPtr{s.heap.curM})
+	return append(newps, ps)
+}
+
+func handleRuntimePresystemstack(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
+	// Get the current G.
+	curG := ps.vs.GetHeap(s.heap.curG)
+	if curG == nil {
+		log.Fatal("failed to determine current G")
+	}
+	// Set the current G to g0. This is a no-op if we're already
+	// on the system stack.
+	ps.vs = ps.vs.ExtendHeap(s.heap.curG, DynHeapPtr{s.heap.g0})
+	// Return the original G.
+	ps.vs = ps.vs.Extend(instr.(ssa.Value), curG)
+	return append(newps, ps)
+}
+
+func handleRuntimePostsystemstack(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
+	// Return the to g returned by presystemstack.
+	origG := ps.vs.Get(instr.(*ssa.Call).Call.Args[0])
+	if origG == nil {
+		log.Fatal("failed to restore G returned by presystemstack")
+	}
+	ps.vs = ps.vs.ExtendHeap(s.heap.curG, origG)
 	return append(newps, ps)
 }

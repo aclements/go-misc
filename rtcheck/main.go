@@ -231,6 +231,19 @@ func main() {
 		roots:   nil,
 		rootSet: make(map[*ssa.Function]struct{}),
 	}
+
+	// Create heap objects we care about.
+	//
+	// TODO: Also track m.locks and m.preemptoff.
+	s.heap.curG = NewHeapObject("curG")
+	userG := NewHeapObject("userG")
+	userG_m := NewHeapObject("userG.m")
+	s.heap.g0 = NewHeapObject("g0")
+	g0_m := NewHeapObject("g0.m")
+	s.heap.curM = NewHeapObject("curM")
+	curM_curg := NewHeapObject("curM.curg")
+	curM_g0 := NewHeapObject("curM.g0")
+
 	// TODO: Add roots from
 	// cmd/compile/internal/gc/builtin/runtime.go. Will need to
 	// add them as roots for PTA too. Maybe just synthesize a main
@@ -242,7 +255,28 @@ func main() {
 	}
 	for i := 0; i < len(s.roots); i++ {
 		root := s.roots[i]
-		exitLockSets := s.walkFunction(root, NewLockSet(stringSpace))
+
+		// Create initial heap state for entering from user space.
+		var vs *ValState
+		vs = vs.ExtendHeap(s.heap.curG, DynHeapPtr{userG})
+		vs = vs.ExtendHeap(userG, DynStruct{"m": userG_m})
+		vs = vs.ExtendHeap(userG_m, DynHeapPtr{s.heap.curM})
+		vs = vs.ExtendHeap(s.heap.g0, DynStruct{"m": g0_m})
+		vs = vs.ExtendHeap(g0_m, DynHeapPtr{s.heap.curM})
+		vs = vs.ExtendHeap(s.heap.curM, DynStruct{"curg": curM_curg, "g0": curM_g0})
+		// Initially we're on the user stack.
+		vs = vs.ExtendHeap(curM_curg, DynHeapPtr{userG})
+		vs = vs.ExtendHeap(curM_g0, DynHeapPtr{s.heap.g0})
+
+		// Create the initial PathState.
+		ps := PathState{
+			lockSet: NewLockSet(stringSpace),
+			vs:      vs,
+		}
+
+		// Walk the function.
+		exitLockSets := s.walkFunction(root, ps)
+
 		// Warn if any locks are held at return.
 		for _, ls := range exitLockSets.M {
 			if len(ls.stacks) == 0 {
@@ -327,6 +361,12 @@ func rewriteSources(pkg *build.Package, rewritten map[string][]byte) {
 		if pkg.Name == "runtime" && fname == "stubs.go" {
 			// Add calls to runtime roots for PTA.
 			buf.Write([]byte(`
+// systemstack is transformed into a call to presystemstack, then
+// the operation, then postsystemstack. These functions are handled
+// specially.
+func rtcheck۰presystemstack() *g { return nil }
+func rtcheck۰postsystemstack(*g) { }
+
 var _ = newobject(nil)
 `))
 		}
@@ -342,8 +382,8 @@ func init() {
 package runtime
 
 // stubs.go
-func getg() *g { return nil }
-// Not mcall or systemstack
+// getg is handled specially.
+// mcall and systemstack are eliminated during rewriting.
 func memclr() { }
 func memmove() { }
 func fastrand1() uint32 { return 0 }
@@ -531,6 +571,9 @@ func rewriteStubs(f *ast.File) {
 func rewriteRuntime(f *ast.File) {
 	// TODO: Do identifier resolution so I know I'm actually
 	// getting the runtime globals.
+	id := func(name string) *ast.Ident {
+		return &ast.Ident{Name: name}
+	}
 	Rewrite(func(node ast.Node) ast.Node {
 		switch node := node.(type) {
 		case *ast.CallExpr:
@@ -540,13 +583,15 @@ func rewriteRuntime(f *ast.File) {
 			}
 			switch id.Name {
 			case "systemstack":
-				return &ast.CallExpr{Fun: node.Args[0], Args: []ast.Expr{}}
+				log.Fatal("systemstack not at statement level")
 			case "mcall":
+				// mcall(f) -> f(nil)
 				return &ast.CallExpr{Fun: node.Args[0], Args: []ast.Expr{&ast.Ident{Name: "nil"}}}
 			case "gopark":
 				if cb, ok := node.Args[0].(*ast.Ident); ok && cb.Name == "nil" {
 					break
 				}
+				// gopark(fn, arg, ...) -> fn(nil, arg)
 				return &ast.CallExpr{
 					Fun: node.Args[0],
 					Args: []ast.Expr{
@@ -555,6 +600,7 @@ func rewriteRuntime(f *ast.File) {
 					},
 				}
 			case "goparkunlock":
+				// goparkunlock(x, ...) -> unlock(x)
 				return &ast.CallExpr{
 					Fun:  &ast.Ident{Name: "unlock"},
 					Args: []ast.Expr{node.Args[0]},
@@ -562,20 +608,30 @@ func rewriteRuntime(f *ast.File) {
 			}
 
 		case *ast.ExprStmt:
-			// Rewrite systemstack(func() { x }) -> { x }
+			// Rewrite:
+			//   systemstack(f) -> {g := presystemstack(); f(); postsystemstack(g) }
+			//   systemstack(func() { x }) -> {g := presystemstack(); x; postsystemstack(g) }
 			expr, ok := node.X.(*ast.CallExpr)
 			if !ok {
 				break
 			}
-			id, ok := expr.Fun.(*ast.Ident)
-			if !ok || id.Name != "systemstack" {
+			fnid, ok := expr.Fun.(*ast.Ident)
+			if !ok || fnid.Name != "systemstack" {
 				break
 			}
-			arg, ok := expr.Args[0].(*ast.FuncLit)
-			if !ok {
-				break
+			var x ast.Stmt
+			if arg, ok := expr.Args[0].(*ast.FuncLit); ok {
+				x = arg.Body
+			} else {
+				x = &ast.ExprStmt{&ast.CallExpr{Fun: expr.Args[0]}}
 			}
-			return arg.Body
+			pre := &ast.AssignStmt{
+				Lhs: []ast.Expr{id("rtcheck۰g")},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{&ast.CallExpr{Fun: id("rtcheck۰presystemstack")}},
+			}
+			post := &ast.ExprStmt{&ast.CallExpr{Fun: id("rtcheck۰postsystemstack"), Args: []ast.Expr{id("rtcheck۰g")}}}
+			return &ast.BlockStmt{List: []ast.Stmt{pre, x, post}}
 
 		case *ast.FuncDecl:
 			// TODO: Some functions are just too hairy for
@@ -901,9 +957,9 @@ func (lss *LockSetSet) String() string {
 
 // funcInfo contains analysis state for a single function.
 type funcInfo struct {
-	// exitLockSets maps from entry lock set to set of exit lock
-	// sets. It memoizes the result of walkFunction.
-	exitLockSets map[LockSetKey]*LockSetSet
+	// exitLockSets is a memoization cache for the results of
+	// state.walkFunction. The values are *LockSetSets.
+	exitLockSets *PathStateMap
 
 	// ifDeps records the set of control-flow dependencies for
 	// each ssa.BasicBlock of this function. These are the values
@@ -995,6 +1051,14 @@ type state struct {
 	fns   map[*ssa.Function]*funcInfo
 	stack *StackFrame
 
+	// heap contains handles to heap objects that are needed by
+	// specially handled functions.
+	heap struct {
+		curG *HeapObject
+		g0   *HeapObject
+		curM *HeapObject
+	}
+
 	lockOrder *LockOrder
 
 	// roots is the list of root functions to visit.
@@ -1065,19 +1129,25 @@ func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
 
 	s.warnl(call.Pos(), "no call graph for %v", call)
 	return nil
-
 }
 
-// walkFunction explores f, given locks held on entry to f. It returns
-// the set of locksets that can be held on exit from f.
+// walkFunction explores f, starting at the given path state. It
+// returns the set of locksets that can be held on exit from f.
+//
+// ps should have block and mask set to nil, and ps.vs should be
+// restricted to just heap values.
 //
 // This implements the lockset algorithm from Engler and Ashcroft,
 // SOSP 2003, plus simple path sensitivity to reduce mistakes from
 // correlated control flow.
 //
+// TODO: This totally fails with multi-use higher-order functions,
+// since the flow computed by the pointer analysis is not segregated
+// by PathState.
+//
 // TODO: A lot of call trees simply don't take locks. We could record
 // that fact and fast-path the entry locks to the exit locks.
-func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
+func (s *state) walkFunction(f *ssa.Function, ps PathState) *LockSetSet {
 	fInfo := s.fns[f]
 	if fInfo == nil {
 		// First visit of this function.
@@ -1121,7 +1191,7 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 		}
 
 		fInfo = &funcInfo{
-			exitLockSets: make(map[LockSetKey]*LockSetSet),
+			exitLockSets: NewPathStateMap(),
 			ifDeps:       ifDeps,
 		}
 		s.fns[f] = fInfo
@@ -1138,7 +1208,7 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	if f.Blocks == nil {
 		// External function. Assume it doesn't affect locks.
 		lss1 := NewLockSetSet()
-		lss1.Add(locks)
+		lss1.Add(ps.lockSet)
 		return lss1
 	}
 
@@ -1152,7 +1222,10 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	}
 
 	if s.debugging {
-		s.debugTree.Pushf("%s\nenter: %v", f, locks)
+		var buf bytes.Buffer
+		fmt.Fprintf(&buf, "%s\nenter: %v\nvalue state:\n", f, ps.lockSet)
+		ps.vs.WriteTo(&buf)
+		s.debugTree.Push(buf.String())
 		defer s.debugTree.Pop()
 	}
 
@@ -1165,16 +1238,15 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	// with new stacks in the process. One could imagine tracking
 	// a "predicate" and a compressed "delta" for the computation
 	// and caching that.
-	locksKey := locks.Key()
-	if memo, ok := fInfo.exitLockSets[locksKey]; ok {
+	if memo := fInfo.exitLockSets.Get(ps); memo != nil {
 		if s.debugging {
 			s.debugTree.Appendf("\ncached: %v", memo)
 		}
-		return memo
+		return memo.(*LockSetSet)
 	}
 
 	if fInfo.debugTree != nil {
-		fInfo.debugTree.Pushf("enter lockset %v", locks)
+		fInfo.debugTree.Pushf("enter lockset %v", ps.lockSet)
 		defer fInfo.debugTree.Pop()
 	}
 
@@ -1186,13 +1258,13 @@ func (s *state) walkFunction(f *ssa.Function, locks *LockSet) *LockSetSet {
 	// issue to include the lock set. However, since we have the
 	// lock set, maybe if we have a cycle with a non-empty lock
 	// set we should report a self-deadlock.
-	fInfo.exitLockSets[locksKey] = &LockSetSet{}
+	fInfo.exitLockSets.Set(ps, &LockSetSet{})
 
 	blockCache := NewPathStateSet()
-	enterPathState := PathState{f.Blocks[0], locks, nil, nil}
+	enterPathState := PathState{f.Blocks[0], ps.lockSet, ps.vs, nil}
 	exitLockSets := NewLockSetSet()
 	s.walkBlock(blockCache, enterPathState, exitLockSets)
-	fInfo.exitLockSets[locksKey] = exitLockSets
+	fInfo.exitLockSets.Set(ps, exitLockSets)
 	//log.Printf("%s: %s -> %s", f.Name(), locks, exitLockSets)
 	if s.debugging {
 		s.debugTree.Appendf("\nexit: %v", exitLockSets)
@@ -1320,6 +1392,45 @@ func (set *PathStateSet) FlatMap(f func(ps PathState, scatch []PathState) []Path
 	return out
 }
 
+// PathStateMap is a mutable map keyed by PathState.
+type PathStateMap struct {
+	m map[pathStateKey][]pathStateMapEntry
+}
+
+type pathStateMapEntry struct {
+	ps  PathState
+	val interface{}
+}
+
+// NewPathStateMap returns a new empty PathStateMap.
+func NewPathStateMap() *PathStateMap {
+	return &PathStateMap{make(map[pathStateKey][]pathStateMapEntry)}
+}
+
+// Set sets the value associated with ps to val in psm.
+func (psm *PathStateMap) Set(ps PathState, val interface{}) {
+	key := ps.HashKey()
+	slice := psm.m[key]
+	for i := range slice {
+		if slice[i].ps.Equal(&ps) {
+			slice[i].val = val
+			return
+		}
+	}
+	psm.m[key] = append(slice, pathStateMapEntry{ps, val})
+}
+
+// Get returns the value associated with ps in psm.
+func (psm *PathStateMap) Get(ps PathState) interface{} {
+	slice := psm.m[ps.HashKey()]
+	for i := range slice {
+		if slice[i].ps.Equal(&ps) {
+			return slice[i].val
+		}
+	}
+	return nil
+}
+
 // walkBlock visits a block and all blocks reachable from it, starting
 // from the path state enterPathState. When walkBlock reaches the
 // return point of the function, it adds the possible lock sets at
@@ -1369,11 +1480,15 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 	doCall := func(instr ssa.Instruction, fns []*ssa.Function) {
 		s.stack = s.stack.Extend(instr)
 		pathStates = pathStates.FlatMap(func(ps PathState, newps []PathState) []PathState {
+			psEntry := PathState{
+				lockSet: ps.lockSet,
+				vs:      ps.vs.LimitToHeap(),
+			}
 			for _, fn := range fns {
 				if handler, ok := callHandlers[fn.String()]; ok {
 					newps = handler(s, ps, instr, newps)
 				} else {
-					for _, ls := range s.walkFunction(fn, ps.lockSet).M {
+					for _, ls := range s.walkFunction(fn, psEntry).M {
 						ps.lockSet = ls
 						newps = append(newps, ps)
 					}

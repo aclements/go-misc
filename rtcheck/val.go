@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
+	"go/types"
 	"io"
 	"log"
 
@@ -19,8 +20,10 @@ import (
 type ValState struct {
 	parent *ValState
 
-	bind ssa.Instruction // Must also be ssa.Value
-	val  DynValue
+	// Either bind or bindh must be set.
+	bind  ssa.Instruction // Must also be ssa.Value
+	bindh *HeapObject     // A value in the heap
+	val   DynValue        // nil to unbind this instruction/object
 }
 
 // Get returns the dynamic value of val, or nil if unknown. val may be
@@ -36,10 +39,6 @@ func (vs *ValState) Get(val ssa.Value) DynValue {
 		return DynConst{val.Value}
 	case *ssa.Global:
 		return DynGlobal{val}
-	case *ssa.FieldAddr:
-		if x := vs.Get(val.X); x != nil {
-			return DynFieldAddr{x, val.Field}
-		}
 	}
 	instr, ok := val.(ssa.Instruction)
 	if !ok {
@@ -47,6 +46,18 @@ func (vs *ValState) Get(val ssa.Value) DynValue {
 	}
 	for vs != nil {
 		if vs.bind == instr {
+			return vs.val
+		}
+		vs = vs.parent
+	}
+	return nil
+}
+
+// GetHeap returns the dynamic value of a heap object, or nil if
+// unknown.
+func (vs *ValState) GetHeap(h *HeapObject) DynValue {
+	for vs != nil {
+		if vs.bindh == h {
 			return vs.val
 		}
 		vs = vs.parent
@@ -70,7 +81,40 @@ func (vs *ValState) Extend(val ssa.Value, dyn DynValue) *ValState {
 	if !ok {
 		return vs
 	}
-	return &ValState{vs, instr, dyn}
+	return &ValState{vs, instr, nil, dyn}
+}
+
+// ExtendHeap returns a new ValState that is like vs, but with heap
+// object h bound to dynamic value val.
+func (vs *ValState) ExtendHeap(h *HeapObject, dyn DynValue) *ValState {
+	if _, ok := dyn.(dynUnknown); ok {
+		// "Unbind" val.
+		if vs.GetHeap(h) == nil {
+			return vs
+		}
+		dyn = nil
+	}
+	return &ValState{vs, nil, h, dyn}
+}
+
+// LimitToHeap returns a ValState containing only the heap bindings in
+// vs.
+func (vs *ValState) LimitToHeap() *ValState {
+	var newvs *ValState
+	have := make(map[*HeapObject]struct{})
+	for ; vs != nil; vs = vs.parent {
+		if vs.bindh == nil {
+			continue
+		}
+		if _, ok := have[vs.bindh]; ok {
+			continue
+		}
+		have[vs.bindh] = struct{}{}
+		if vs.val != nil {
+			newvs = newvs.ExtendHeap(vs.bindh, vs.val)
+		}
+	}
+	return newvs
 }
 
 // Do applies the effect of instr to the value state and returns an
@@ -84,7 +128,7 @@ func (vs *ValState) Do(instr ssa.Instruction) *ValState {
 
 	case *ssa.UnOp:
 		if x := vs.Get(instr.X); x != nil {
-			vs = vs.Extend(instr, x.UnOp(instr.Op))
+			vs = vs.Extend(instr, x.UnOp(instr.Op, vs))
 		}
 
 	case *ssa.ChangeType:
@@ -92,43 +136,87 @@ func (vs *ValState) Do(instr ssa.Instruction) *ValState {
 			vs = vs.Extend(instr, x)
 		}
 
-		// TODO: ssa.Convert
+	case *ssa.FieldAddr:
+		if x := vs.Get(instr.X); x != nil {
+			switch x := x.(type) {
+			case DynGlobal:
+				vs = vs.Extend(instr, DynFieldAddr{x.global, instr.Field})
+			case DynHeapPtr:
+				vs = vs.Extend(instr, x.FieldAddr(vs, instr))
+			}
+		}
+
+	case *ssa.Store:
+		// Handle stores to tracked heap objects.
+		//
+		// TODO: This could be storing to something in the
+		// known heap, but we may have failed to track the
+		// aliasing of it and think that this is untracked.
+		if addr := vs.Get(instr.Addr); addr != nil {
+			if addr, ok := addr.(DynHeapPtr); ok {
+				val := vs.Get(instr.Val)
+				if val == nil {
+					val = dynUnknown{}
+				}
+				vs = vs.ExtendHeap(addr.elem, val)
+			}
+		}
+
+		// TODO: ssa.Convert, ssa.Field
 	}
 	return vs
 }
 
 // EqualAt returns true if vs and o have equal dynamic values for each
-// value in at.
+// value in at, and equal heap values for all heap objects.
 func (vs *ValState) EqualAt(o *ValState, at map[ssa.Instruction]struct{}) bool {
 	if len(at) == 0 {
 		// Fast path for empty at set.
 		return true
 	}
-	flatten := func(vs *ValState) map[ssa.Instruction]DynValue {
+	flatten := func(vs *ValState) (map[ssa.Instruction]DynValue, map[*HeapObject]DynValue) {
 		// TODO: Cache flattening?
-		out := make(map[ssa.Instruction]DynValue)
+		instrs := make(map[ssa.Instruction]DynValue)
+		heap := make(map[*HeapObject]DynValue)
 		for ; vs != nil; vs = vs.parent {
-			if _, keep := at[vs.bind]; !keep {
-				continue
-			}
-			if _, ok := out[vs.bind]; !ok {
-				out[vs.bind] = vs.val
+			if vs.bindh != nil {
+				if _, ok := heap[vs.bindh]; !ok {
+					heap[vs.bindh] = vs.val
+				}
+			} else {
+				if _, keep := at[vs.bind]; !keep {
+					continue
+				}
+				if _, ok := instrs[vs.bind]; !ok {
+					instrs[vs.bind] = vs.val
+				}
 			}
 		}
-		// Eliminate unbound values from out.
-		for k, v := range out {
+		// Eliminate unbound values.
+		for k, v := range instrs {
 			if v == nil {
-				delete(out, k)
+				delete(instrs, k)
 			}
 		}
-		return out
+		for k, v := range heap {
+			if v == nil {
+				delete(heap, k)
+			}
+		}
+		return instrs, heap
 	}
-	vs1, vs2 := flatten(vs), flatten(o)
-	if len(vs1) != len(vs2) {
+	vs1i, vs1h := flatten(vs)
+	vs2i, vs2h := flatten(o)
+	if len(vs1i) != len(vs2i) || len(vs1h) != len(vs2h) {
 		return false
 	}
-	for k1, v1 := range vs1 {
-		if v2, ok := vs2[k1]; !ok || !v1.Equal(v2) {
+	for k1, v1 := range vs1i {
+		if v2, ok := vs2i[k1]; !ok || !v1.Equal(v2) {
+			return false
+		}
+	}
+	for k1, v1 := range vs1h {
+		if v2, ok := vs2h[k1]; !ok || !v1.Equal(v2) {
 			return false
 		}
 	}
@@ -138,12 +226,22 @@ func (vs *ValState) EqualAt(o *ValState, at map[ssa.Instruction]struct{}) bool {
 // WriteTo writes a debug representation of vs to w.
 func (vs *ValState) WriteTo(w io.Writer) {
 	shown := map[ssa.Instruction]struct{}{}
+	shownh := map[*HeapObject]struct{}{}
 	for ; vs != nil; vs = vs.parent {
-		if _, ok := shown[vs.bind]; ok {
-			continue
+		if vs.bindh != nil {
+			if _, ok := shownh[vs.bindh]; ok {
+				continue
+			}
+			shownh[vs.bindh] = struct{}{}
+			fmt.Fprintf(w, "%s", vs.bindh)
+		} else {
+			if _, ok := shown[vs.bind]; ok {
+				continue
+			}
+			shown[vs.bind] = struct{}{}
+			fmt.Fprintf(w, "%s", vs.bind.(ssa.Value).Name())
 		}
-		fmt.Fprintf(w, "%v = %v\n", vs.bind.(ssa.Value).Name(), vs.val)
-		shown[vs.bind] = struct{}{}
+		fmt.Fprintf(w, " = %v\n", vs.val)
 	}
 }
 
@@ -153,7 +251,7 @@ func (vs *ValState) WriteTo(w io.Writer) {
 type DynValue interface {
 	Equal(other DynValue) bool
 	BinOp(op token.Token, other DynValue) DynValue
-	UnOp(op token.Token) DynValue
+	UnOp(op token.Token, vs *ValState) DynValue
 }
 
 type dynUnknown struct{}
@@ -166,7 +264,7 @@ func (dynUnknown) BinOp(op token.Token, other DynValue) DynValue {
 	panic("BinOp on unknown dynamic value")
 }
 
-func (dynUnknown) UnOp(op token.Token) DynValue {
+func (dynUnknown) UnOp(op token.Token, vs *ValState) DynValue {
 	panic("UnOp on unknown dynamic value")
 }
 
@@ -202,11 +300,13 @@ func (x DynConst) BinOp(op token.Token, y DynValue) DynValue {
 	}
 }
 
-func (x DynConst) UnOp(op token.Token) DynValue {
+func (x DynConst) UnOp(op token.Token, vs *ValState) DynValue {
 	return DynConst{constant.UnaryOp(op, x.c, 64)}
 }
 
-func addrBinOp(x DynValue, op token.Token, y DynValue) DynValue {
+// comparableBinOp implements DynValue.BinOp for values that support
+// only comparison operators.
+func comparableBinOp(x DynValue, op token.Token, y DynValue) DynValue {
 	equal := x.Equal(y)
 	switch op {
 	case token.EQL:
@@ -227,6 +327,7 @@ func addrUnOp(op token.Token) DynValue {
 	panic("unreachable")
 }
 
+// DynNil is a nil pointer.
 type DynNil struct{}
 
 func (x DynNil) Equal(y DynValue) bool {
@@ -235,13 +336,15 @@ func (x DynNil) Equal(y DynValue) bool {
 }
 
 func (x DynNil) BinOp(op token.Token, y DynValue) DynValue {
-	return addrBinOp(x, op, y)
+	return comparableBinOp(x, op, y)
 }
 
-func (x DynNil) UnOp(op token.Token) DynValue {
+func (x DynNil) UnOp(op token.Token, vs *ValState) DynValue {
 	return addrUnOp(op)
 }
 
+// DynGlobal is the address of a global. Because it's the address of a
+// global, it can only alias other DynGlobals.
 type DynGlobal struct {
 	global *ssa.Global
 }
@@ -252,27 +355,119 @@ func (x DynGlobal) Equal(y DynValue) bool {
 }
 
 func (x DynGlobal) BinOp(op token.Token, y DynValue) DynValue {
-	return addrBinOp(x, op, y)
+	return comparableBinOp(x, op, y)
 }
 
-func (x DynGlobal) UnOp(op token.Token) DynValue {
+func (x DynGlobal) UnOp(op token.Token, vs *ValState) DynValue {
 	return addrUnOp(op)
 }
 
+// DynFieldAddr is the address of a field in a global. Because it is
+// only fields in globals, it can only alias other DynFieldAddrs.
+//
+// TODO: We could unify DynFieldAddr and DynHeapAddr if we created
+// (and cached) HeapObjects for globals and fields of globals as
+// needed.
 type DynFieldAddr struct {
-	object DynValue // Must be address-like
+	object *ssa.Global
 	field  int
 }
 
 func (x DynFieldAddr) Equal(y DynValue) bool {
-	yfa, isFieldAddr := y.(DynFieldAddr)
-	return isFieldAddr && x.field == yfa.field && x.object.Equal(yfa.object)
+	y2, isFieldAddr := y.(DynFieldAddr)
+	return isFieldAddr && x.object == y2.object && x.field == y2.field
 }
 
 func (x DynFieldAddr) BinOp(op token.Token, y DynValue) DynValue {
-	return addrBinOp(x, op, y)
+	return comparableBinOp(x, op, y)
 }
 
-func (x DynFieldAddr) UnOp(op token.Token) DynValue {
+func (x DynFieldAddr) UnOp(op token.Token, vs *ValState) DynValue {
 	return addrUnOp(op)
+}
+
+// DynHeapPtr is a pointer to a tracked heap object. Because globals
+// and heap objects are tracked separately, a DynHeapPtr can only
+// alias other DynHeapPtrs.
+type DynHeapPtr struct {
+	elem *HeapObject
+}
+
+func (x DynHeapPtr) String() string {
+	return "&" + x.elem.String()
+}
+
+func (x DynHeapPtr) Equal(y DynValue) bool {
+	y2, isHeapPtr := y.(DynHeapPtr)
+	return isHeapPtr && x.elem == y2.elem
+}
+
+func (x DynHeapPtr) BinOp(op token.Token, y DynValue) DynValue {
+	return comparableBinOp(x, op, y)
+}
+
+func (x DynHeapPtr) UnOp(op token.Token, vs *ValState) DynValue {
+	if op == token.MUL {
+		return vs.GetHeap(x.elem)
+	}
+	return addrUnOp(op)
+}
+
+func (x DynHeapPtr) FieldAddr(vs *ValState, instr *ssa.FieldAddr) DynValue {
+	obj := vs.GetHeap(x.elem)
+	if obj == nil {
+		return dynUnknown{}
+	}
+	strct := obj.(DynStruct)
+	fieldName := instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name()
+	if fieldVal, ok := strct[fieldName]; ok {
+		return DynHeapPtr{fieldVal}
+	}
+	return dynUnknown{}
+}
+
+// DynStruct is a struct value consisting of heap objects. It maps
+// from field name to heap object. Note that each tracked field is its
+// own heap object; e.g., even if it's just an int field, it's
+// considered a HeapObject. This makes it possible to track pointers
+// to fields.
+type DynStruct map[string]*HeapObject
+
+func (x DynStruct) Equal(y DynValue) bool {
+	y2, ok := y.(DynStruct)
+	if !ok || len(x) != len(y2) {
+		return false
+	}
+	for k, v := range x {
+		if y2[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func (x DynStruct) BinOp(op token.Token, y DynValue) DynValue {
+	return comparableBinOp(x, op, y)
+}
+
+func (x DynStruct) UnOp(op token.Token, vs *ValState) DynValue {
+	log.Fatal("bad struct operation: %v", op)
+	panic("unreachable")
+}
+
+// A HeapObject is a tracked object in the heap. HeapObjects have
+// identity; that is, for two *HeapObjects x and y, they refer to the
+// same heap object if and only if x == y. HeapObjects have a string
+// label for debugging purposes, but this label does not affect
+// identity.
+type HeapObject struct {
+	label string
+}
+
+func NewHeapObject(label string) *HeapObject {
+	return &HeapObject{label}
+}
+
+func (h *HeapObject) String() string {
+	return "heap:" + h.label
 }

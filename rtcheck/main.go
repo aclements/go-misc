@@ -179,8 +179,6 @@ func main() {
 	// TODO: Teach it that you can jump to sigprof at any point?
 	//
 	// TODO: Teach it about implicit write barriers?
-	//
-	// TODO: Teach it about morestack at every function entry?
 
 	// Prepare for pointer analysis.
 	ptrConfig := pointer.Config{
@@ -347,9 +345,10 @@ func rewriteSources(pkg *build.Package, rewritten map[string][]byte) {
 			log.Fatalf("%s: %s", path, err)
 		}
 
-		rewriteStubs(f)
+		isNosplit := map[ast.Decl]bool{}
+		rewriteStubs(f, isNosplit)
 		if pkg.Name == "runtime" {
-			rewriteRuntime(f)
+			rewriteRuntime(f, isNosplit)
 		}
 
 		// Back to source.
@@ -378,6 +377,13 @@ var _ = newobject(nil)
 var newStubs = make(map[string]map[string]*ast.FuncDecl)
 
 func init() {
+	// TODO: Perhaps I should do most of these as "special"
+	// functions, and do the few that affect pointers (like
+	// noescape) as call rewrites.
+
+	// Stubs provide implementations for assembly functions that
+	// are not declared in the Go source code. All of these are
+	// automatically marked go:nosplit.
 	var runtimeStubs = `
 package runtime
 
@@ -405,7 +411,7 @@ func setcallerpc() { }
 func getcallerpc() uintptr { return 0 }
 func getcallersp() uintptr { return 0 }
 func asmcgocall() int32 { return 0 }
-func morestack() { newstack() }
+// morestack is handled specially.
 func time_now() (int64, int32) { return 0, 0 }
 
 // os_linux.go
@@ -553,7 +559,7 @@ func StorepNoWB(ptr unsafe.Pointer, val unsafe.Pointer) {
 	}
 }
 
-func rewriteStubs(f *ast.File) {
+func rewriteStubs(f *ast.File, isNosplit map[ast.Decl]bool) {
 	// Replace declaration bodies.
 	for _, decl := range f.Decls {
 		switch decl := decl.(type) {
@@ -561,14 +567,40 @@ func rewriteStubs(f *ast.File) {
 			if decl.Body != nil {
 				continue
 			}
-			if newDecl, ok := newStubs[f.Name.Name][decl.Name.Name]; ok {
-				decl.Body = newDecl.Body
+			newDecl, ok := newStubs[f.Name.Name][decl.Name.Name]
+			if !ok {
+				continue
 			}
+			decl.Body = newDecl.Body
+			isNosplit[decl] = true
 		}
 	}
 }
 
-func rewriteRuntime(f *ast.File) {
+func rewriteRuntime(f *ast.File, isNosplit map[ast.Decl]bool) {
+	// Attach go:nosplit directives to top-level declarations. We
+	// have to do this before the Rewrite walk because go/ast
+	// drops comments separated by newlines from the AST, leaving
+	// them only in File.Comments. But to agree with the
+	// compiler's interpretation of these comments, we need all of
+	// the comments.
+	cgs := f.Comments
+	for _, decl := range f.Decls {
+		// Process comments before decl.
+		for len(cgs) > 0 && cgs[0].Pos() < decl.Pos() {
+			for _, c := range cgs[0].List {
+				if c.Text == "//go:nosplit" {
+					isNosplit[decl] = true
+				}
+			}
+			cgs = cgs[1:]
+		}
+		// Ignore comments in decl.
+		for len(cgs) > 0 && cgs[0].Pos() < decl.End() {
+			cgs = cgs[1:]
+		}
+	}
+
 	// TODO: Do identifier resolution so I know I'm actually
 	// getting the runtime globals.
 	id := func(name string) *ast.Ident {
@@ -645,6 +677,7 @@ func rewriteRuntime(f *ast.File) {
 						},
 					},
 				}
+
 			case "traceEvent", "cgoContextPCs", "callCgoSymbolizer":
 				// TODO: A bunch of false positives
 				// come from callCgoSymbolizer and
@@ -657,8 +690,18 @@ func rewriteRuntime(f *ast.File) {
 				// which leads to all sorts of bad
 				// lock edges.
 				node.Body = &ast.BlockStmt{}
-
 			}
+
+			// Insert morestack() prologue.
+			//
+			// TODO: This only happens in the runtime
+			// package right now. It should happen in all
+			// packages.
+			if node.Body == nil || len(node.Body.List) == 0 || isNosplit[node] {
+				break
+			}
+			call := &ast.ExprStmt{&ast.CallExpr{Fun: id("morestack"), Args: []ast.Expr{}, Lparen: node.Body.Pos()}}
+			node.Body.List = append([]ast.Stmt{call}, node.Body.List...)
 		}
 		return node
 	}, f)
@@ -1147,6 +1190,11 @@ func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
 //
 // TODO: A lot of call trees simply don't take locks. We could record
 // that fact and fast-path the entry locks to the exit locks.
+//
+// TODO: Since this returns only a LockSetSets, it can't report its
+// effect on heap path state. That works right now because those
+// effects are always perfectly nested, but won't work for, e.g.,
+// m.locks.
 func (s *state) walkFunction(f *ssa.Function, ps PathState) *LockSetSet {
 	fInfo := s.fns[f]
 	if fInfo == nil {
@@ -1486,6 +1534,10 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 			}
 			for _, fn := range fns {
 				if handler, ok := callHandlers[fn.String()]; ok {
+					// TODO: Instead of using
+					// FlatMap, I could just pass
+					// the PathStateSet to add new
+					// states to.
 					newps = handler(s, ps, instr, newps)
 				} else {
 					for _, ls := range s.walkFunction(fn, psEntry).M {

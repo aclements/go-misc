@@ -20,26 +20,38 @@ type callHandler func(s *state, ps PathState, instr ssa.Instruction, newps []Pat
 
 // callHandlers maps from function names (the result of
 // ssa.Function.String()) to handlers for special functions.
-var callHandlers = map[string]callHandler{
-	"runtime.lock":   handleRuntimeLock,
-	"runtime.unlock": handleRuntimeUnlock,
+//
+// TODO: Several of these are not nosplit and hence should model the
+// implicit morestack.
+var callHandlers map[string]callHandler
 
-	"runtime.casgstatus":          handleRuntimeCasgstatus,
-	"runtime.castogscanstatus":    handleRuntimeCastogscanstatus,
-	"runtime.casfrom_Gscanstatus": handleRuntimeCasfrom_Gscanstatus,
+func init() {
+	// Go's initialization order rule doesn't distinguish between
+	// function pointers and function calls, so we have to
+	// initialize callHandlers outside of the initialization order.
+	callHandlers = map[string]callHandler{
+		"runtime.lock":   handleRuntimeLock,
+		"runtime.unlock": handleRuntimeUnlock,
 
-	"runtime.getg":                    handleRuntimeGetg,
-	"runtime.acquirem":                handleRuntimeAcquirem,
-	"runtime.rtcheck۰presystemstack":  handleRuntimePresystemstack,
-	"runtime.rtcheck۰postsystemstack": handleRuntimePostsystemstack,
+		"runtime.casgstatus":          handleRuntimeCasgstatus,
+		"runtime.castogscanstatus":    handleRuntimeCastogscanstatus,
+		"runtime.casfrom_Gscanstatus": handleRuntimeCasfrom_Gscanstatus,
 
-	// restartg does a conditional unlock of _Gscan, but it's hard
-	// to track that condition. In practice, it always does the
-	// unlock, so handle it just like casefrom_Gscanstatus.
-	//
-	// TODO: This function is silly. We should probably remove it
-	// from the runtime.
-	"runtime.restartg": handleRuntimeCasfrom_Gscanstatus,
+		"runtime.getg":                    handleRuntimeGetg,
+		"runtime.acquirem":                handleRuntimeAcquirem,
+		"runtime.rtcheck۰presystemstack":  handleRuntimePresystemstack,
+		"runtime.rtcheck۰postsystemstack": handleRuntimePostsystemstack,
+
+		"runtime.morestack": handleRuntimeMorestack,
+
+		// restartg does a conditional unlock of _Gscan, but it's hard
+		// to track that condition. In practice, it always does the
+		// unlock, so handle it just like casefrom_Gscanstatus.
+		//
+		// TODO: This function is silly. We should probably remove it
+		// from the runtime.
+		"runtime.restartg": handleRuntimeCasfrom_Gscanstatus,
+	}
 }
 
 func handleRuntimeLock(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
@@ -132,4 +144,42 @@ func handleRuntimePostsystemstack(s *state, ps PathState, instr ssa.Instruction,
 	}
 	ps.vs = ps.vs.ExtendHeap(s.heap.curG, origG)
 	return append(newps, ps)
+}
+
+func handleRuntimeMorestack(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
+	// Get the current G.
+	curG := ps.vs.GetHeap(s.heap.curG)
+	if curG == nil {
+		log.Fatal("failed to determine current G")
+	}
+	// If we're on the system stack we either have room or we
+	// panic, so just return from morestack.
+	if curG.(DynHeapPtr).elem == s.heap.g0 {
+		return append(newps, ps)
+	}
+
+	// Otherwise, we may or may not call newstack. Take both
+	// paths. This is important because newstack doesn't
+	// technically "return", so we're going to lose that execution
+	// path.
+	newps = append(newps, ps)
+
+	// Call newstack on the system stack.
+	//
+	// TODO: This duplicates some of doCall. Can I make the
+	// walkFunction API nicer so this is nicer?
+	newstack := instr.Parent().Prog.ImportedPackage("runtime").Func("newstack")
+	psEntry := PathState{
+		lockSet: ps.lockSet,
+		vs:      ps.vs.ExtendHeap(s.heap.curG, DynHeapPtr{s.heap.g0}).LimitToHeap(),
+	}
+	for _, ls := range s.walkFunction(newstack, psEntry).M {
+		// Since walkFunction can't return effects on heap
+		// state right now, we can just use our pre-system
+		// stack switch PathState here to "switch back" to the
+		// user stack.
+		ps.lockSet = ls
+		newps = append(newps, ps)
+	}
+	return newps
 }

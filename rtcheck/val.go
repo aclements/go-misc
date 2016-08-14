@@ -24,8 +24,17 @@ type ValState struct {
 
 // frameValState tracks the known dynamic values of ssa.Values in a
 // particular execution path of a single stack frame.
+//
+// frameValState is effectively a persistent map represented as a
+// linked list possibly terminated in a Go map. For efficiency, the
+// linked list is compacted into a Go map when the size of the linked
+// list and the size of the map at the end of the chain are the same.
 type frameValState struct {
 	parent *frameValState
+	budget int
+
+	// If flat is non-nil, parent, bind, and val must all be nil.
+	flat map[ssa.Instruction]DynValue
 
 	bind ssa.Instruction // Must also be ssa.Value
 	val  DynValue        // nil to unbind this instruction
@@ -34,6 +43,10 @@ type frameValState struct {
 // heapValState tracks the known dynamic values of heap objects.
 type heapValState struct {
 	parent *heapValState
+	budget int
+
+	// If flat is non-nil, parent, bind, and val must all be nil.
+	flat map[*HeapObject]DynValue
 
 	bind *HeapObject // A value in the heap
 	val  DynValue    // nil to unbind this object
@@ -58,6 +71,9 @@ func (vs ValState) Get(val ssa.Value) DynValue {
 		return nil
 	}
 	for frame := vs.frame; frame != nil; frame = frame.parent {
+		if frame.flat != nil {
+			return frame.flat[instr]
+		}
 		if frame.bind == instr {
 			return frame.val
 		}
@@ -69,6 +85,9 @@ func (vs ValState) Get(val ssa.Value) DynValue {
 // unknown.
 func (vs ValState) GetHeap(h *HeapObject) DynValue {
 	for heap := vs.heap; heap != nil; heap = heap.parent {
+		if heap.flat != nil {
+			return heap.flat[h]
+		}
 		if heap.bind == h {
 			return heap.val
 		}
@@ -80,7 +99,6 @@ func (vs ValState) GetHeap(h *HeapObject) DynValue {
 // to dynamic value val. If dyn is dynUnknown, Extend unbinds val.
 // Extend is a no-op if called with a pure ssa.Value.
 func (vs ValState) Extend(val ssa.Value, dyn DynValue) ValState {
-	// TODO: Flatten periodically.
 	if _, ok := dyn.(dynUnknown); ok {
 		// "Unbind" val.
 		if vs.Get(val) == nil {
@@ -93,7 +111,16 @@ func (vs ValState) Extend(val ssa.Value, dyn DynValue) ValState {
 	if !ok {
 		return vs
 	}
-	return ValState{&frameValState{vs.frame, instr, dyn}, vs.heap}
+
+	budget := 4
+	if vs.frame != nil {
+		budget = vs.frame.budget - 1
+	}
+	vs = ValState{&frameValState{vs.frame, budget, nil, instr, dyn}, vs.heap}
+	if vs.frame.budget <= 0 {
+		vs.frame.flatten()
+	}
+	return vs
 }
 
 // ExtendHeap returns a new ValState that is like vs, but with heap
@@ -106,7 +133,16 @@ func (vs ValState) ExtendHeap(h *HeapObject, dyn DynValue) ValState {
 		}
 		dyn = nil
 	}
-	return ValState{vs.frame, &heapValState{vs.heap, h, dyn}}
+
+	budget := 4
+	if vs.heap != nil {
+		budget = vs.heap.budget - 1
+	}
+	vs = ValState{vs.frame, &heapValState{vs.heap, budget, nil, h, dyn}}
+	if vs.heap.budget <= 0 {
+		vs.heap.flatten()
+	}
+	return vs
 }
 
 // LimitToHeap returns a ValState containing only the heap bindings in
@@ -165,40 +201,72 @@ func (vs ValState) Do(instr ssa.Instruction) ValState {
 	return vs
 }
 
-func (fs *frameValState) flatten(at map[ssa.Instruction]struct{}) map[ssa.Instruction]DynValue {
-	// TODO: Cache flattening?
-	instrs := make(map[ssa.Instruction]DynValue)
-	for ; fs != nil; fs = fs.parent {
-		if _, keep := at[fs.bind]; !keep {
-			continue
+func (fs *frameValState) flatten() map[ssa.Instruction]DynValue {
+	if fs == nil {
+		return nil
+	}
+	if fs.flat != nil {
+		return fs.flat
+	}
+	// Collect bindings into a map.
+	flat := make(map[ssa.Instruction]DynValue)
+	for fs2 := fs; fs2 != nil; fs2 = fs2.parent {
+		if fs2.flat != nil {
+			for k, v := range fs2.flat {
+				if _, ok := flat[k]; !ok {
+					flat[k] = v
+				}
+			}
+			break
 		}
-		if _, ok := instrs[fs.bind]; !ok {
-			instrs[fs.bind] = fs.val
+		if _, ok := flat[fs2.bind]; !ok {
+			flat[fs2.bind] = fs2.val
 		}
 	}
 	// Eliminate unbound values.
-	for k, v := range instrs {
+	for k, v := range flat {
 		if v == nil {
-			delete(instrs, k)
+			delete(flat, k)
 		}
 	}
-	return instrs
+	fs.flat = flat
+	fs.budget = len(flat) + 1
+	fs.parent, fs.bind, fs.val = nil, nil, nil
+	return fs.flat
 }
 
 func (hs *heapValState) flatten() map[*HeapObject]DynValue {
-	heap := make(map[*HeapObject]DynValue)
-	for ; hs != nil; hs = hs.parent {
-		if _, ok := heap[hs.bind]; !ok {
-			heap[hs.bind] = hs.val
+	if hs == nil {
+		return nil
+	}
+	if hs.flat != nil {
+		return hs.flat
+	}
+	// Collect bindings into a map.
+	flat := make(map[*HeapObject]DynValue)
+	for hs2 := hs; hs2 != nil; hs2 = hs2.parent {
+		if hs2.flat != nil {
+			for k, v := range hs2.flat {
+				if _, ok := flat[k]; !ok {
+					flat[k] = v
+				}
+			}
+			break
+		}
+		if _, ok := flat[hs2.bind]; !ok {
+			flat[hs2.bind] = hs2.val
 		}
 	}
 	// Eliminate unbound values.
-	for k, v := range heap {
+	for k, v := range flat {
 		if v == nil {
-			delete(heap, k)
+			delete(flat, k)
 		}
 	}
-	return heap
+	hs.flat = flat
+	hs.budget = len(flat) + 1
+	hs.parent, hs.bind, hs.val = nil, nil, nil
+	return hs.flat
 }
 
 // EqualAt returns true if vs and o have equal dynamic values for each
@@ -206,12 +274,11 @@ func (hs *heapValState) flatten() map[*HeapObject]DynValue {
 func (vs ValState) EqualAt(o ValState, at map[ssa.Instruction]struct{}) bool {
 	if len(at) != 0 {
 		// Check frame state.
-		i1, i2 := vs.frame.flatten(at), o.frame.flatten(at)
-		if len(i1) != len(i2) {
-			return false
-		}
-		for k1, v1 := range i1 {
-			if v2, ok := i2[k1]; !ok || !v1.Equal(v2) {
+		i1, i2 := vs.frame.flatten(), o.frame.flatten()
+		for k := range at {
+			v1, ok1 := i1[k]
+			v2, ok2 := i2[k]
+			if ok1 != ok2 || (ok1 && !v1.Equal(v2)) {
 				return false
 			}
 		}
@@ -232,21 +299,13 @@ func (vs ValState) EqualAt(o ValState, at map[ssa.Instruction]struct{}) bool {
 // WriteTo writes a debug representation of vs to w.
 func (vs ValState) WriteTo(w io.Writer) {
 	// TODO: Sort.
-	shownh := map[*HeapObject]struct{}{}
-	for h := vs.heap; h != nil; h = h.parent {
-		if _, ok := shownh[h.bind]; ok {
-			continue
-		}
-		shownh[h.bind] = struct{}{}
-		fmt.Fprintf(w, "%s = %v\n", h.bind, h.val)
+	h := vs.heap.flatten()
+	for bind, val := range h {
+		fmt.Fprintf(w, "%s = %v\n", bind, val)
 	}
-	showni := map[ssa.Instruction]struct{}{}
-	for f := vs.frame; f != nil; f = f.parent {
-		if _, ok := showni[f.bind]; ok {
-			continue
-		}
-		showni[f.bind] = struct{}{}
-		fmt.Fprintf(w, "%s = %v\n", f.bind.(ssa.Value).Name(), f.val)
+	f := vs.frame.flatten()
+	for bind, val := range f {
+		fmt.Fprintf(w, "%s = %v\n", bind.(ssa.Value).Name(), val)
 	}
 }
 

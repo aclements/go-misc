@@ -170,10 +170,6 @@ func (vs *ValState) Do(instr ssa.Instruction) *ValState {
 // EqualAt returns true if vs and o have equal dynamic values for each
 // value in at, and equal heap values for all heap objects.
 func (vs *ValState) EqualAt(o *ValState, at map[ssa.Instruction]struct{}) bool {
-	if len(at) == 0 {
-		// Fast path for empty at set.
-		return true
-	}
 	flatten := func(vs *ValState) (map[ssa.Instruction]DynValue, map[*HeapObject]DynValue) {
 		// TODO: Cache flattening?
 		instrs := make(map[ssa.Instruction]DynValue)

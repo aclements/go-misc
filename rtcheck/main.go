@@ -255,7 +255,7 @@ func main() {
 		root := s.roots[i]
 
 		// Create initial heap state for entering from user space.
-		var vs *ValState
+		var vs ValState
 		vs = vs.ExtendHeap(s.heap.curG, DynHeapPtr{userG})
 		vs = vs.ExtendHeap(userG, DynStruct{"m": userG_m})
 		vs = vs.ExtendHeap(userG_m, DynHeapPtr{s.heap.curM})
@@ -1324,7 +1324,7 @@ func (s *state) walkFunction(f *ssa.Function, ps PathState) *LockSetSet {
 type PathState struct {
 	block   *ssa.BasicBlock
 	lockSet *LockSet
-	vs      *ValState
+	vs      ValState
 	mask    map[ssa.Instruction]struct{}
 }
 

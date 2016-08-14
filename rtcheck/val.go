@@ -15,22 +15,35 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
-// ValState tracks the known dynamic values of ssa.Values in a
-// particular execution path.
+// ValState tracks the known dynamic values of instructions and heap
+// objects.
 type ValState struct {
-	parent *ValState
+	frame *frameValState
+	heap  *heapValState
+}
 
-	// Either bind or bindh must be set.
-	bind  ssa.Instruction // Must also be ssa.Value
-	bindh *HeapObject     // A value in the heap
-	val   DynValue        // nil to unbind this instruction/object
+// frameValState tracks the known dynamic values of ssa.Values in a
+// particular execution path of a single stack frame.
+type frameValState struct {
+	parent *frameValState
+
+	bind ssa.Instruction // Must also be ssa.Value
+	val  DynValue        // nil to unbind this instruction
+}
+
+// heapValState tracks the known dynamic values of heap objects.
+type heapValState struct {
+	parent *heapValState
+
+	bind *HeapObject // A value in the heap
+	val  DynValue    // nil to unbind this object
 }
 
 // Get returns the dynamic value of val, or nil if unknown. val may be
 // a pure ssa.Value (not an ssa.Instruction), in which case it will be
 // resolved directly to a DynValue if possible. Otherwise, Get will
 // look up the value bound to val by a previous call to Extend.
-func (vs *ValState) Get(val ssa.Value) DynValue {
+func (vs ValState) Get(val ssa.Value) DynValue {
 	switch val := val.(type) {
 	case *ssa.Const:
 		if val.Value == nil {
@@ -44,23 +57,21 @@ func (vs *ValState) Get(val ssa.Value) DynValue {
 	if !ok {
 		return nil
 	}
-	for vs != nil {
-		if vs.bind == instr {
-			return vs.val
+	for frame := vs.frame; frame != nil; frame = frame.parent {
+		if frame.bind == instr {
+			return frame.val
 		}
-		vs = vs.parent
 	}
 	return nil
 }
 
 // GetHeap returns the dynamic value of a heap object, or nil if
 // unknown.
-func (vs *ValState) GetHeap(h *HeapObject) DynValue {
-	for vs != nil {
-		if vs.bindh == h {
-			return vs.val
+func (vs ValState) GetHeap(h *HeapObject) DynValue {
+	for heap := vs.heap; heap != nil; heap = heap.parent {
+		if heap.bind == h {
+			return heap.val
 		}
-		vs = vs.parent
 	}
 	return nil
 }
@@ -68,7 +79,8 @@ func (vs *ValState) GetHeap(h *HeapObject) DynValue {
 // Extend returns a new ValState that is like vs, but with bind bound
 // to dynamic value val. If dyn is dynUnknown, Extend unbinds val.
 // Extend is a no-op if called with a pure ssa.Value.
-func (vs *ValState) Extend(val ssa.Value, dyn DynValue) *ValState {
+func (vs ValState) Extend(val ssa.Value, dyn DynValue) ValState {
+	// TODO: Flatten periodically.
 	if _, ok := dyn.(dynUnknown); ok {
 		// "Unbind" val.
 		if vs.Get(val) == nil {
@@ -81,12 +93,12 @@ func (vs *ValState) Extend(val ssa.Value, dyn DynValue) *ValState {
 	if !ok {
 		return vs
 	}
-	return &ValState{vs, instr, nil, dyn}
+	return ValState{&frameValState{vs.frame, instr, dyn}, vs.heap}
 }
 
 // ExtendHeap returns a new ValState that is like vs, but with heap
 // object h bound to dynamic value val.
-func (vs *ValState) ExtendHeap(h *HeapObject, dyn DynValue) *ValState {
+func (vs ValState) ExtendHeap(h *HeapObject, dyn DynValue) ValState {
 	if _, ok := dyn.(dynUnknown); ok {
 		// "Unbind" val.
 		if vs.GetHeap(h) == nil {
@@ -94,55 +106,41 @@ func (vs *ValState) ExtendHeap(h *HeapObject, dyn DynValue) *ValState {
 		}
 		dyn = nil
 	}
-	return &ValState{vs, nil, h, dyn}
+	return ValState{vs.frame, &heapValState{vs.heap, h, dyn}}
 }
 
 // LimitToHeap returns a ValState containing only the heap bindings in
 // vs.
-func (vs *ValState) LimitToHeap() *ValState {
-	var newvs *ValState
-	have := make(map[*HeapObject]struct{})
-	for ; vs != nil; vs = vs.parent {
-		if vs.bindh == nil {
-			continue
-		}
-		if _, ok := have[vs.bindh]; ok {
-			continue
-		}
-		have[vs.bindh] = struct{}{}
-		if vs.val != nil {
-			newvs = newvs.ExtendHeap(vs.bindh, vs.val)
-		}
-	}
-	return newvs
+func (vs ValState) LimitToHeap() ValState {
+	return ValState{nil, vs.heap}
 }
 
 // Do applies the effect of instr to the value state and returns an
 // Extended ValState.
-func (vs *ValState) Do(instr ssa.Instruction) *ValState {
+func (vs ValState) Do(instr ssa.Instruction) ValState {
 	switch instr := instr.(type) {
 	case *ssa.BinOp:
 		if x, y := vs.Get(instr.X), vs.Get(instr.Y); x != nil && y != nil {
-			vs = vs.Extend(instr, x.BinOp(instr.Op, y))
+			return vs.Extend(instr, x.BinOp(instr.Op, y))
 		}
 
 	case *ssa.UnOp:
 		if x := vs.Get(instr.X); x != nil {
-			vs = vs.Extend(instr, x.UnOp(instr.Op, vs))
+			return vs.Extend(instr, x.UnOp(instr.Op, vs))
 		}
 
 	case *ssa.ChangeType:
 		if x := vs.Get(instr.X); x != nil {
-			vs = vs.Extend(instr, x)
+			return vs.Extend(instr, x)
 		}
 
 	case *ssa.FieldAddr:
 		if x := vs.Get(instr.X); x != nil {
 			switch x := x.(type) {
 			case DynGlobal:
-				vs = vs.Extend(instr, DynFieldAddr{x.global, instr.Field})
+				return vs.Extend(instr, DynFieldAddr{x.global, instr.Field})
 			case DynHeapPtr:
-				vs = vs.Extend(instr, x.FieldAddr(vs, instr))
+				return vs.Extend(instr, x.FieldAddr(vs, instr))
 			}
 		}
 
@@ -158,7 +156,7 @@ func (vs *ValState) Do(instr ssa.Instruction) *ValState {
 				if val == nil {
 					val = dynUnknown{}
 				}
-				vs = vs.ExtendHeap(addr.elem, val)
+				return vs.ExtendHeap(addr.elem, val)
 			}
 		}
 
@@ -167,52 +165,64 @@ func (vs *ValState) Do(instr ssa.Instruction) *ValState {
 	return vs
 }
 
+func (fs *frameValState) flatten(at map[ssa.Instruction]struct{}) map[ssa.Instruction]DynValue {
+	// TODO: Cache flattening?
+	instrs := make(map[ssa.Instruction]DynValue)
+	for ; fs != nil; fs = fs.parent {
+		if _, keep := at[fs.bind]; !keep {
+			continue
+		}
+		if _, ok := instrs[fs.bind]; !ok {
+			instrs[fs.bind] = fs.val
+		}
+	}
+	// Eliminate unbound values.
+	for k, v := range instrs {
+		if v == nil {
+			delete(instrs, k)
+		}
+	}
+	return instrs
+}
+
+func (hs *heapValState) flatten() map[*HeapObject]DynValue {
+	heap := make(map[*HeapObject]DynValue)
+	for ; hs != nil; hs = hs.parent {
+		if _, ok := heap[hs.bind]; !ok {
+			heap[hs.bind] = hs.val
+		}
+	}
+	// Eliminate unbound values.
+	for k, v := range heap {
+		if v == nil {
+			delete(heap, k)
+		}
+	}
+	return heap
+}
+
 // EqualAt returns true if vs and o have equal dynamic values for each
 // value in at, and equal heap values for all heap objects.
-func (vs *ValState) EqualAt(o *ValState, at map[ssa.Instruction]struct{}) bool {
-	flatten := func(vs *ValState) (map[ssa.Instruction]DynValue, map[*HeapObject]DynValue) {
-		// TODO: Cache flattening?
-		instrs := make(map[ssa.Instruction]DynValue)
-		heap := make(map[*HeapObject]DynValue)
-		for ; vs != nil; vs = vs.parent {
-			if vs.bindh != nil {
-				if _, ok := heap[vs.bindh]; !ok {
-					heap[vs.bindh] = vs.val
-				}
-			} else {
-				if _, keep := at[vs.bind]; !keep {
-					continue
-				}
-				if _, ok := instrs[vs.bind]; !ok {
-					instrs[vs.bind] = vs.val
-				}
-			}
-		}
-		// Eliminate unbound values.
-		for k, v := range instrs {
-			if v == nil {
-				delete(instrs, k)
-			}
-		}
-		for k, v := range heap {
-			if v == nil {
-				delete(heap, k)
-			}
-		}
-		return instrs, heap
-	}
-	vs1i, vs1h := flatten(vs)
-	vs2i, vs2h := flatten(o)
-	if len(vs1i) != len(vs2i) || len(vs1h) != len(vs2h) {
-		return false
-	}
-	for k1, v1 := range vs1i {
-		if v2, ok := vs2i[k1]; !ok || !v1.Equal(v2) {
+func (vs ValState) EqualAt(o ValState, at map[ssa.Instruction]struct{}) bool {
+	if len(at) != 0 {
+		// Check frame state.
+		i1, i2 := vs.frame.flatten(at), o.frame.flatten(at)
+		if len(i1) != len(i2) {
 			return false
 		}
+		for k1, v1 := range i1 {
+			if v2, ok := i2[k1]; !ok || !v1.Equal(v2) {
+				return false
+			}
+		}
 	}
-	for k1, v1 := range vs1h {
-		if v2, ok := vs2h[k1]; !ok || !v1.Equal(v2) {
+	// Check heap state.
+	h1, h2 := vs.heap.flatten(), o.heap.flatten()
+	if len(h1) != len(h2) {
+		return false
+	}
+	for k1, v1 := range h1 {
+		if v2, ok := h2[k1]; !ok || !v1.Equal(v2) {
 			return false
 		}
 	}
@@ -220,24 +230,23 @@ func (vs *ValState) EqualAt(o *ValState, at map[ssa.Instruction]struct{}) bool {
 }
 
 // WriteTo writes a debug representation of vs to w.
-func (vs *ValState) WriteTo(w io.Writer) {
-	shown := map[ssa.Instruction]struct{}{}
+func (vs ValState) WriteTo(w io.Writer) {
+	// TODO: Sort.
 	shownh := map[*HeapObject]struct{}{}
-	for ; vs != nil; vs = vs.parent {
-		if vs.bindh != nil {
-			if _, ok := shownh[vs.bindh]; ok {
-				continue
-			}
-			shownh[vs.bindh] = struct{}{}
-			fmt.Fprintf(w, "%s", vs.bindh)
-		} else {
-			if _, ok := shown[vs.bind]; ok {
-				continue
-			}
-			shown[vs.bind] = struct{}{}
-			fmt.Fprintf(w, "%s", vs.bind.(ssa.Value).Name())
+	for h := vs.heap; h != nil; h = h.parent {
+		if _, ok := shownh[h.bind]; ok {
+			continue
 		}
-		fmt.Fprintf(w, " = %v\n", vs.val)
+		shownh[h.bind] = struct{}{}
+		fmt.Fprintf(w, "%s = %v\n", h.bind, h.val)
+	}
+	showni := map[ssa.Instruction]struct{}{}
+	for f := vs.frame; f != nil; f = f.parent {
+		if _, ok := showni[f.bind]; ok {
+			continue
+		}
+		showni[f.bind] = struct{}{}
+		fmt.Fprintf(w, "%s = %v\n", f.bind.(ssa.Value).Name(), f.val)
 	}
 }
 
@@ -247,7 +256,7 @@ func (vs *ValState) WriteTo(w io.Writer) {
 type DynValue interface {
 	Equal(other DynValue) bool
 	BinOp(op token.Token, other DynValue) DynValue
-	UnOp(op token.Token, vs *ValState) DynValue
+	UnOp(op token.Token, vs ValState) DynValue
 }
 
 type dynUnknown struct{}
@@ -260,7 +269,7 @@ func (dynUnknown) BinOp(op token.Token, other DynValue) DynValue {
 	panic("BinOp on unknown dynamic value")
 }
 
-func (dynUnknown) UnOp(op token.Token, vs *ValState) DynValue {
+func (dynUnknown) UnOp(op token.Token, vs ValState) DynValue {
 	panic("UnOp on unknown dynamic value")
 }
 
@@ -296,7 +305,7 @@ func (x DynConst) BinOp(op token.Token, y DynValue) DynValue {
 	}
 }
 
-func (x DynConst) UnOp(op token.Token, vs *ValState) DynValue {
+func (x DynConst) UnOp(op token.Token, vs ValState) DynValue {
 	return DynConst{constant.UnaryOp(op, x.c, 64)}
 }
 
@@ -335,7 +344,7 @@ func (x DynNil) BinOp(op token.Token, y DynValue) DynValue {
 	return comparableBinOp(x, op, y)
 }
 
-func (x DynNil) UnOp(op token.Token, vs *ValState) DynValue {
+func (x DynNil) UnOp(op token.Token, vs ValState) DynValue {
 	return addrUnOp(op)
 }
 
@@ -354,7 +363,7 @@ func (x DynGlobal) BinOp(op token.Token, y DynValue) DynValue {
 	return comparableBinOp(x, op, y)
 }
 
-func (x DynGlobal) UnOp(op token.Token, vs *ValState) DynValue {
+func (x DynGlobal) UnOp(op token.Token, vs ValState) DynValue {
 	return addrUnOp(op)
 }
 
@@ -378,7 +387,7 @@ func (x DynFieldAddr) BinOp(op token.Token, y DynValue) DynValue {
 	return comparableBinOp(x, op, y)
 }
 
-func (x DynFieldAddr) UnOp(op token.Token, vs *ValState) DynValue {
+func (x DynFieldAddr) UnOp(op token.Token, vs ValState) DynValue {
 	return addrUnOp(op)
 }
 
@@ -402,14 +411,14 @@ func (x DynHeapPtr) BinOp(op token.Token, y DynValue) DynValue {
 	return comparableBinOp(x, op, y)
 }
 
-func (x DynHeapPtr) UnOp(op token.Token, vs *ValState) DynValue {
+func (x DynHeapPtr) UnOp(op token.Token, vs ValState) DynValue {
 	if op == token.MUL {
 		return vs.GetHeap(x.elem)
 	}
 	return addrUnOp(op)
 }
 
-func (x DynHeapPtr) FieldAddr(vs *ValState, instr *ssa.FieldAddr) DynValue {
+func (x DynHeapPtr) FieldAddr(vs ValState, instr *ssa.FieldAddr) DynValue {
 	obj := vs.GetHeap(x.elem)
 	if obj == nil {
 		return dynUnknown{}
@@ -446,7 +455,7 @@ func (x DynStruct) BinOp(op token.Token, y DynValue) DynValue {
 	return comparableBinOp(x, op, y)
 }
 
-func (x DynStruct) UnOp(op token.Token, vs *ValState) DynValue {
+func (x DynStruct) UnOp(op token.Token, vs ValState) DynValue {
 	log.Fatal("bad struct operation: %v", op)
 	panic("unreachable")
 }

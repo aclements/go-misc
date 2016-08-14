@@ -169,17 +169,16 @@ func handleRuntimeMorestack(s *state, ps PathState, instr ssa.Instruction, newps
 	// TODO: This duplicates some of doCall. Can I make the
 	// walkFunction API nicer so this is nicer?
 	newstack := instr.Parent().Prog.ImportedPackage("runtime").Func("newstack")
-	psEntry := PathState{
+	ps = PathState{
 		lockSet: ps.lockSet,
 		vs:      ps.vs.ExtendHeap(s.heap.curG, DynHeapPtr{s.heap.g0}).LimitToHeap(),
 	}
-	for _, ls := range s.walkFunction(newstack, psEntry).M {
-		// Since walkFunction can't return effects on heap
-		// state right now, we can just use our pre-system
-		// stack switch PathState here to "switch back" to the
-		// user stack.
-		ps.lockSet = ls
+	s.walkFunction(newstack, ps).ForEach(func(ps2 PathState) {
+		ps.lockSet = ps2.lockSet
+		ps.vs.heap = ps2.vs.heap
+		// Leave system stack.
+		ps.vs = ps.vs.ExtendHeap(s.heap.curG, curG)
 		newps = append(newps, ps)
-	}
+	})
 	return newps
 }

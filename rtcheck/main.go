@@ -273,16 +273,16 @@ func main() {
 		}
 
 		// Walk the function.
-		exitLockSets := s.walkFunction(root, ps)
+		exitStates := s.walkFunction(root, ps)
 
 		// Warn if any locks are held at return.
-		for _, ls := range exitLockSets.M {
-			if len(ls.stacks) == 0 {
-				continue
+		exitStates.ForEach(func(ps PathState) {
+			if len(ps.lockSet.stacks) == 0 {
+				return
 			}
-			s.warnl(root.Pos(), "locks at return from root %s: %s", root, exitLockSets)
+			s.warnl(root.Pos(), "locks at return from root %s: %s", root, ps.lockSet)
 			s.warnl(root.Pos(), "\t(likely analysis failed to match control flow for unlock)\n")
-		}
+		})
 	}
 
 	// Dump debug trees.
@@ -1000,9 +1000,9 @@ func (lss *LockSetSet) String() string {
 
 // funcInfo contains analysis state for a single function.
 type funcInfo struct {
-	// exitLockSets is a memoization cache for the results of
-	// state.walkFunction. The values are *LockSetSets.
-	exitLockSets *PathStateMap
+	// exitStates is a memoization cache that maps from the enter
+	// PathState of state.walkFunction to its exit *PathStateSet.
+	exitStates *PathStateMap
 
 	// ifDeps records the set of control-flow dependencies for
 	// each ssa.BasicBlock of this function. These are the values
@@ -1175,10 +1175,13 @@ func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
 }
 
 // walkFunction explores f, starting at the given path state. It
-// returns the set of locksets that can be held on exit from f.
+// returns the set of path states possible on exit from f.
 //
 // ps should have block and mask set to nil, and ps.vs should be
 // restricted to just heap values.
+//
+// Path states returned from walkFunction will likewise have block and
+// mask set to nil and ps.vs restricted to just heap values.
 //
 // This implements the lockset algorithm from Engler and Ashcroft,
 // SOSP 2003, plus simple path sensitivity to reduce mistakes from
@@ -1190,12 +1193,7 @@ func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
 //
 // TODO: A lot of call trees simply don't take locks. We could record
 // that fact and fast-path the entry locks to the exit locks.
-//
-// TODO: Since this returns only a LockSetSets, it can't report its
-// effect on heap path state. That works right now because those
-// effects are always perfectly nested, but won't work for, e.g.,
-// m.locks.
-func (s *state) walkFunction(f *ssa.Function, ps PathState) *LockSetSet {
+func (s *state) walkFunction(f *ssa.Function, ps PathState) *PathStateSet {
 	fInfo := s.fns[f]
 	if fInfo == nil {
 		// First visit of this function.
@@ -1239,8 +1237,8 @@ func (s *state) walkFunction(f *ssa.Function, ps PathState) *LockSetSet {
 		}
 
 		fInfo = &funcInfo{
-			exitLockSets: NewPathStateMap(),
-			ifDeps:       ifDeps,
+			exitStates: NewPathStateMap(),
+			ifDeps:     ifDeps,
 		}
 		s.fns[f] = fInfo
 
@@ -1254,10 +1252,11 @@ func (s *state) walkFunction(f *ssa.Function, ps PathState) *LockSetSet {
 	}
 
 	if f.Blocks == nil {
-		// External function. Assume it doesn't affect locks.
-		lss1 := NewLockSetSet()
-		lss1.Add(ps.lockSet)
-		return lss1
+		// External function. Assume it doesn't affect locks
+		// or heap state.
+		pss1 := NewPathStateSet()
+		pss1.Add(ps)
+		return pss1
 	}
 
 	if debugFunctions[f.String()] && s.debugging == false {
@@ -1286,11 +1285,11 @@ func (s *state) walkFunction(f *ssa.Function, ps PathState) *LockSetSet {
 	// with new stacks in the process. One could imagine tracking
 	// a "predicate" and a compressed "delta" for the computation
 	// and caching that.
-	if memo := fInfo.exitLockSets.Get(ps); memo != nil {
+	if memo := fInfo.exitStates.Get(ps); memo != nil {
 		if s.debugging {
 			s.debugTree.Appendf("\ncached: %v", memo)
 		}
-		return memo.(*LockSetSet)
+		return memo.(*PathStateSet)
 	}
 
 	if fInfo.debugTree != nil {
@@ -1306,18 +1305,18 @@ func (s *state) walkFunction(f *ssa.Function, ps PathState) *LockSetSet {
 	// issue to include the lock set. However, since we have the
 	// lock set, maybe if we have a cycle with a non-empty lock
 	// set we should report a self-deadlock.
-	fInfo.exitLockSets.Set(ps, &LockSetSet{})
+	fInfo.exitStates.Set(ps, emptyPathStateSet)
 
 	blockCache := NewPathStateSet()
 	enterPathState := PathState{f.Blocks[0], ps.lockSet, ps.vs, nil}
-	exitLockSets := NewLockSetSet()
-	s.walkBlock(blockCache, enterPathState, exitLockSets)
-	fInfo.exitLockSets.Set(ps, exitLockSets)
-	//log.Printf("%s: %s -> %s", f.Name(), locks, exitLockSets)
+	exitStates := NewPathStateSet()
+	s.walkBlock(blockCache, enterPathState, exitStates)
+	fInfo.exitStates.Set(ps, exitStates)
+	//log.Printf("%s: %s -> %s", f.Name(), locks, exitStates)
 	if s.debugging {
-		s.debugTree.Appendf("\nexit: %v", exitLockSets)
+		s.debugTree.Appendf("\nexit: %v", exitStates)
 	}
-	return exitLockSets
+	return exitStates
 }
 
 // PathState is the state during execution of a particular function.
@@ -1350,6 +1349,15 @@ func (ps *PathState) Equal(ps2 *PathState) bool {
 	return ps.block == ps2.block && ps.lockSet.Equal(ps2.lockSet) && ps.vs.EqualAt(ps2.vs, ps.mask)
 }
 
+// ExitState returns ps narrowed to the path state tracked across a
+// function return.
+func (ps *PathState) ExitState() PathState {
+	return PathState{
+		lockSet: ps.lockSet,
+		vs:      ps.vs.LimitToHeap(),
+	}
+}
+
 // PathStateSet is a mutable set of PathStates.
 type PathStateSet struct {
 	m map[pathStateKey][]PathState
@@ -1358,6 +1366,12 @@ type PathStateSet struct {
 // NewPathStateSet returns a new, empty PathStateSet.
 func NewPathStateSet() *PathStateSet {
 	return &PathStateSet{make(map[pathStateKey][]PathState)}
+}
+
+var emptyPathStateSet = NewPathStateSet()
+
+func (set *PathStateSet) Empty() bool {
+	return len(set.m) == 0
 }
 
 // Add adds PathState ps to set.
@@ -1481,11 +1495,11 @@ func (psm *PathStateMap) Get(ps PathState) interface{} {
 
 // walkBlock visits a block and all blocks reachable from it, starting
 // from the path state enterPathState. When walkBlock reaches the
-// return point of the function, it adds the possible lock sets at
-// that point to exitLockSets. blockCache is the set of already
+// return point of the function, it adds the possible path states at
+// that point to exitStates. blockCache is the set of already
 // visited path states within this function as of the beginning of
 // visited blocks.
-func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, exitLockSets *LockSetSet) {
+func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, exitStates *PathStateSet) {
 	b := enterPathState.block
 	f := b.Parent()
 	// Check the values that are live at this
@@ -1540,10 +1554,11 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 					// states to.
 					newps = handler(s, ps, instr, newps)
 				} else {
-					for _, ls := range s.walkFunction(fn, psEntry).M {
-						ps.lockSet = ls
+					s.walkFunction(fn, psEntry).ForEach(func(ps2 PathState) {
+						ps.lockSet = ps2.lockSet
+						ps.vs.heap = ps2.vs.heap
 						newps = append(newps, ps)
-					}
+					})
 				}
 			}
 			return newps
@@ -1649,7 +1664,7 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 			}
 
 			pathStates.ForEach(func(ps PathState) {
-				exitLockSets.Add(ps.lockSet)
+				exitStates.Add(ps.ExitState())
 			})
 		}
 	}
@@ -1733,7 +1748,7 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 					debugTree.SetEdge("F")
 				}
 			}
-			s.walkBlock(blockCache, ps2, exitLockSets)
+			s.walkBlock(blockCache, ps2, exitStates)
 		}
 	})
 }

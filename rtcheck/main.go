@@ -1116,10 +1116,21 @@ type state struct {
 }
 
 func (s *state) warnl(pos token.Pos, format string, args ...interface{}) {
+	// TODO: Suppress duplicate warnings.
+	//
+	// TODO: Have a different message for path terminating conditions.
 	if pos.IsValid() {
 		fmt.Printf("%s: ", s.fset.Position(pos))
 	}
 	fmt.Printf(format+"\n", args...)
+}
+
+func (s *state) warnp(pos token.Pos, format string, args ...interface{}) {
+	s.warnl(pos, format+" at", args...)
+	for stack := s.stack; stack != nil; stack = stack.parent {
+		fmt.Printf("    %s\n", stack.call.Parent().String())
+		fmt.Printf("        %s\n", s.fset.Position(stack.call.Pos()))
+	}
 }
 
 // addRoot adds fn as a root of the control flow graph to visit.

@@ -55,6 +55,8 @@ func init() {
 }
 
 func handleRuntimeLock(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
+	// TODO: Most of the lock(&mheap_.lock) have an empty
+	// points-to set, which means we can't track that lock.
 	lock := s.pta.Queries[instr.(*ssa.Call).Call.Args[0]].PointsTo()
 	newls := NewLockSet(ps.lockSet.sp).Plus(lock, s.stack)
 	s.lockOrder.Add(ps.lockSet, newls, s.stack)
@@ -63,7 +65,8 @@ func handleRuntimeLock(s *state, ps PathState, instr ssa.Instruction, newps []Pa
 	//
 	// TODO: This is only sound if we know it's the same lock
 	// *instance*.
-	if ps.lockSet == ls2 {
+	if ps.lockSet == ls2 && len(lock.Labels()) > 0 {
+		s.warnp(instr.Pos(), "possible self-deadlock %s %s; trimming path", ps.lockSet, lock)
 		return newps
 	}
 	ps.lockSet = ls2

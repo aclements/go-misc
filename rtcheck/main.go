@@ -232,15 +232,16 @@ func main() {
 
 	// Create heap objects we care about.
 	//
-	// TODO: Also track m.locks and m.preemptoff.
+	// TODO: Also track m.preemptoff.
 	s.heap.curG = NewHeapObject("curG")
 	userG := NewHeapObject("userG")
 	userG_m := NewHeapObject("userG.m")
 	s.heap.g0 = NewHeapObject("g0")
 	g0_m := NewHeapObject("g0.m")
 	s.heap.curM = NewHeapObject("curM")
-	curM_curg := NewHeapObject("curM.curg")
 	curM_g0 := NewHeapObject("curM.g0")
+	curM_curg := NewHeapObject("curM.curg")
+	s.heap.curM_locks = NewHeapObject("curM.locks")
 
 	// TODO: Add roots from
 	// cmd/compile/internal/gc/builtin/runtime.go. Will need to
@@ -261,10 +262,12 @@ func main() {
 		vs = vs.ExtendHeap(userG_m, DynHeapPtr{s.heap.curM})
 		vs = vs.ExtendHeap(s.heap.g0, DynStruct{"m": g0_m})
 		vs = vs.ExtendHeap(g0_m, DynHeapPtr{s.heap.curM})
-		vs = vs.ExtendHeap(s.heap.curM, DynStruct{"curg": curM_curg, "g0": curM_g0})
+		vs = vs.ExtendHeap(s.heap.curM, DynStruct{"curg": curM_curg, "g0": curM_g0, "locks": s.heap.curM_locks})
+		vs = vs.ExtendHeap(curM_g0, DynHeapPtr{s.heap.g0})
 		// Initially we're on the user stack.
 		vs = vs.ExtendHeap(curM_curg, DynHeapPtr{userG})
-		vs = vs.ExtendHeap(curM_g0, DynHeapPtr{s.heap.g0})
+		// And hold no locks.
+		vs = vs.ExtendHeap(s.heap.curM_locks, DynConst{constant.MakeInt64(0)})
 
 		// Create the initial PathState.
 		ps := PathState{
@@ -793,6 +796,13 @@ func (sp *StringSpace) Intern(str string) int {
 	return id
 }
 
+// TryIntern interns str if it has been interned before. Otherwise, it
+// does not intern the string and returns 0, false.
+func (sp *StringSpace) TryIntern(str string) (int, bool) {
+	id, ok := sp.m[str]
+	return id, ok
+}
+
 // LockSet represents a set of locks and where they were acquired.
 type LockSet struct {
 	sp     *StringSpace
@@ -853,6 +863,17 @@ func (set *LockSet) Equal(set2 *LockSet) bool {
 		}
 	}
 	return true
+}
+
+// Contains returns true if set contains any of the locks in s.
+func (set *LockSet) ContainsAny(s pointer.PointsToSet) bool {
+	for _, label := range s.Labels() {
+		id, ok := set.sp.TryIntern(label.String())
+		if ok && set.bits.Bit(id) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Plus returns a LockSet that extends set with all locks in s,
@@ -1097,9 +1118,10 @@ type state struct {
 	// heap contains handles to heap objects that are needed by
 	// specially handled functions.
 	heap struct {
-		curG *HeapObject
-		g0   *HeapObject
-		curM *HeapObject
+		curG       *HeapObject
+		g0         *HeapObject
+		curM       *HeapObject
+		curM_locks *HeapObject
 	}
 
 	lockOrder *LockOrder

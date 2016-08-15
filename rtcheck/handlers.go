@@ -6,6 +6,7 @@ package main
 
 import (
 	"go/constant"
+	"go/token"
 	"log"
 
 	"golang.org/x/tools/go/ssa"
@@ -39,6 +40,7 @@ func init() {
 
 		"runtime.getg":                    handleRuntimeGetg,
 		"runtime.acquirem":                handleRuntimeAcquirem,
+		"runtime.releasem":                handleRuntimeReleasem,
 		"runtime.rtcheck۰presystemstack":  handleRuntimePresystemstack,
 		"runtime.rtcheck۰postsystemstack": handleRuntimePostsystemstack,
 
@@ -70,13 +72,44 @@ func handleRuntimeLock(s *state, ps PathState, instr ssa.Instruction, newps []Pa
 		return newps
 	}
 	ps.lockSet = ls2
+	// m.locks++
+	mlocks := ps.vs.GetHeap(s.heap.curM_locks).(DynConst)
+	nlocks, _ := constant.Int64Val(mlocks.c)
+	const maxLocks = 16
+	if nlocks >= maxLocks {
+		s.warnp(instr.Pos(), "%d locks held; trimming path", nlocks)
+		return newps
+	}
+	ps.vs = ps.vs.ExtendHeap(s.heap.curM_locks, mlocks.BinOp(token.ADD, DynConst{constant.MakeInt64(1)}))
 	return append(newps, ps)
 }
 
 func handleRuntimeUnlock(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
 	lock := s.pta.Queries[instr.(*ssa.Call).Call.Args[0]].PointsTo()
-	// TODO: Warn on unlock of unlocked lock.
+	held := ps.lockSet.ContainsAny(lock) || len(lock.Labels()) == 0
 	ps.lockSet = ps.lockSet.Minus(lock)
+	// m.locks-- if lock is held. We only do this conditionally
+	// because sometimes our handling of correlated control flow
+	// leads to *three* paths: both lock and unlock, neither lock
+	// or unlock, and just unlock.
+	//
+	// We also do this if the label set is empty, since in that
+	// case ContainsAny vacuously returned false, but lock() still
+	// increased m.locks.
+	if held || len(lock.Labels()) == 0 {
+		mlocks := ps.vs.GetHeap(s.heap.curM_locks).(DynConst)
+		if constant.Compare(mlocks.c, token.LEQ, constant.MakeInt64(0)) {
+			// Terminate path.
+			s.warnp(instr.Pos(), "unlock with m.locks <= 0; trimming path")
+			return newps
+		}
+		ps.vs = ps.vs.ExtendHeap(s.heap.curM_locks, mlocks.BinOp(token.SUB, DynConst{constant.MakeInt64(1)}))
+	} else {
+		// TODO: Perhaps warn more stringently if this is a
+		// single instance lock class, though even then we
+		// could be confused by control flow.
+		s.warnl(instr.Pos(), "possible unlock of unlocked lock")
+	}
 	return append(newps, ps)
 }
 
@@ -120,8 +153,22 @@ func handleRuntimeGetg(s *state, ps PathState, instr ssa.Instruction, newps []Pa
 }
 
 func handleRuntimeAcquirem(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
-	// TODO: Update m.locks.
 	ps.vs = ps.vs.Extend(instr.(ssa.Value), DynHeapPtr{s.heap.curM})
+	// m.locks++
+	mlocks := ps.vs.GetHeap(s.heap.curM_locks).(DynConst)
+	ps.vs = ps.vs.ExtendHeap(s.heap.curM_locks, mlocks.BinOp(token.ADD, DynConst{constant.MakeInt64(1)}))
+	return append(newps, ps)
+}
+
+func handleRuntimeReleasem(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
+	// releasem does an m.locks--, but m comes in as an argument,
+	// so we can't tell that it's just curM. If we were to track
+	// argument and return values, we might be able to get this
+	// and acquirem right automatically.
+	//
+	// m.locks--
+	mlocks := ps.vs.GetHeap(s.heap.curM_locks).(DynConst)
+	ps.vs = ps.vs.ExtendHeap(s.heap.curM_locks, mlocks.BinOp(token.SUB, DynConst{constant.MakeInt64(1)}))
 	return append(newps, ps)
 }
 

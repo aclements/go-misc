@@ -193,8 +193,8 @@ function zoomify(svg, fill) {
             0.5, // WheelEvent.DOM_DELTA_PAGE
         ];
         var factor = Math.pow(2, -delta / rates[ev.originalEvent.deltaMode]);
-        point.x = ev.clientX;
-        point.y = ev.clientY;
+        point.x = ev.clientX === undefined ? ev.originalEvent.clientX : ev.clientX;
+        point.y = ev.clientY === undefined ? ev.originalEvent.clientY : ev.clientY;
         var center = point.matrixTransform(svg[0].getScreenCTM().inverse());
 
         // Scale by factor around center.

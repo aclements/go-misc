@@ -1281,8 +1281,8 @@ func (s *state) walkFunction(f *ssa.Function, ps PathState) *PathStateSet {
 
 	if s.debugging {
 		var buf bytes.Buffer
-		fmt.Fprintf(&buf, "%s\nenter: %v\nvalue state:\n", f, ps.lockSet)
-		ps.vs.WriteTo(&buf)
+		fmt.Fprintf(&buf, "%s\n- enter -\n", f)
+		ps.WriteTo(&buf)
 		s.debugTree.Push(buf.String())
 		defer s.debugTree.Pop()
 	}
@@ -1298,13 +1298,16 @@ func (s *state) walkFunction(f *ssa.Function, ps PathState) *PathStateSet {
 	// and caching that.
 	if memo := fInfo.exitStates.Get(ps); memo != nil {
 		if s.debugging {
-			s.debugTree.Appendf("\ncached: %v", memo)
+			s.debugTree.Appendf("\n- cached exit -\n%v", memo)
 		}
 		return memo.(*PathStateSet)
 	}
 
 	if fInfo.debugTree != nil {
-		fInfo.debugTree.Pushf("enter lockset %v", ps.lockSet)
+		var buf bytes.Buffer
+		fmt.Fprintf(&buf, "%s\n- enter -\n", f)
+		ps.WriteTo(&buf)
+		fInfo.debugTree.Push(buf.String())
 		defer fInfo.debugTree.Pop()
 	}
 
@@ -1325,7 +1328,7 @@ func (s *state) walkFunction(f *ssa.Function, ps PathState) *PathStateSet {
 	fInfo.exitStates.Set(ps, exitStates)
 	//log.Printf("%s: %s -> %s", f.Name(), locks, exitStates)
 	if s.debugging {
-		s.debugTree.Appendf("\nexit: %v", exitStates)
+		s.debugTree.Appendf("\n- exit -\n%v", exitStates)
 	}
 	return exitStates
 }
@@ -1367,6 +1370,17 @@ func (ps *PathState) ExitState() PathState {
 		lockSet: ps.lockSet,
 		vs:      ps.vs.LimitToHeap(),
 	}
+}
+
+func (ps *PathState) WriteTo(w io.Writer) {
+	if ps.block == nil {
+		fmt.Fprintf(w, "PathState for function:\n")
+	} else {
+		fmt.Fprintf(w, "PathState for %s block %d:\n", ps.block.Parent(), ps.block.Index)
+	}
+	fmt.Fprintf(w, "  locks: %v\n", ps.lockSet)
+	fmt.Fprintf(w, "  values:\n")
+	ps.vs.WriteTo(&IndentWriter{W: w, Indent: []byte("    ")})
 }
 
 // PathStateSet is a mutable set of PathStates.
@@ -1524,8 +1538,8 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 	debugTree := s.fns[f].debugTree
 	if debugTree != nil {
 		var buf bytes.Buffer
-		fmt.Fprintf(&buf, "block %v\nlockset %v\nvalue state:\n", b.Index, enterPathState.lockSet)
-		enterPathState.vs.WriteTo(&buf)
+		fmt.Fprintf(&buf, "block %v\n", b.Index)
+		enterPathState.WriteTo(&buf)
 		debugTree.Push(buf.String())
 		defer debugTree.Pop()
 	}
@@ -1676,6 +1690,11 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 
 			pathStates.ForEach(func(ps PathState) {
 				exitStates.Add(ps.ExitState())
+				if debugTree != nil {
+					var buf bytes.Buffer
+					ps.WriteTo(&buf)
+					debugTree.Leaff("exit:\n%s", buf)
+				}
 			})
 		}
 	}

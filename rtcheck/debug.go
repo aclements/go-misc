@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 )
@@ -94,4 +95,39 @@ func (t *DebugTree) WriteToDot(w io.Writer) {
 		rec(root)
 	}
 	fmt.Fprint(w, "}\n")
+}
+
+type IndentWriter struct {
+	W      io.Writer
+	Indent []byte
+	inLine bool
+}
+
+func (w *IndentWriter) Write(p []byte) (n int, err error) {
+	total := 0
+	for len(p) > 0 {
+		if !w.inLine {
+			_, err := w.W.Write(w.Indent)
+			if err != nil {
+				return total, err
+			}
+			w.inLine = true
+		}
+
+		next := bytes.IndexByte(p, '\n')
+		if next < 0 {
+			n, err := w.W.Write(p)
+			total += n
+			return total, err
+		}
+		line, rest := p[:next+1], p[next+1:]
+		n, err := w.W.Write(line)
+		total += n
+		if n < len(line) || err != nil {
+			return total, err
+		}
+		w.inLine = false
+		p = rest
+	}
+	return total, nil
 }

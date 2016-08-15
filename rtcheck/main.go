@@ -242,6 +242,7 @@ func main() {
 	curM_g0 := NewHeapObject("curM.g0")
 	curM_curg := NewHeapObject("curM.curg")
 	s.heap.curM_locks = NewHeapObject("curM.locks")
+	curM_printlock := NewHeapObject("curM.printlock")
 
 	// TODO: Add roots from
 	// cmd/compile/internal/gc/builtin/runtime.go. Will need to
@@ -262,12 +263,13 @@ func main() {
 		vs = vs.ExtendHeap(userG_m, DynHeapPtr{s.heap.curM})
 		vs = vs.ExtendHeap(s.heap.g0, DynStruct{"m": g0_m})
 		vs = vs.ExtendHeap(g0_m, DynHeapPtr{s.heap.curM})
-		vs = vs.ExtendHeap(s.heap.curM, DynStruct{"curg": curM_curg, "g0": curM_g0, "locks": s.heap.curM_locks})
+		vs = vs.ExtendHeap(s.heap.curM, DynStruct{"curg": curM_curg, "g0": curM_g0, "locks": s.heap.curM_locks, "printlock": curM_printlock})
 		vs = vs.ExtendHeap(curM_g0, DynHeapPtr{s.heap.g0})
 		// Initially we're on the user stack.
 		vs = vs.ExtendHeap(curM_curg, DynHeapPtr{userG})
 		// And hold no locks.
 		vs = vs.ExtendHeap(s.heap.curM_locks, DynConst{constant.MakeInt64(0)})
+		vs = vs.ExtendHeap(curM_printlock, DynConst{constant.MakeInt64(0)})
 
 		// Create the initial PathState.
 		ps := PathState{

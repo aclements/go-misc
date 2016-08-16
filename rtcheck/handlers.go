@@ -60,6 +60,9 @@ func handleRuntimeLock(s *state, ps PathState, instr ssa.Instruction, newps []Pa
 	// TODO: Most of the lock(&mheap_.lock) have an empty
 	// points-to set, which means we can't track that lock.
 	lock := s.pta.Queries[instr.(*ssa.Call).Call.Args[0]].PointsTo()
+	if len(lock.Labels()) == 0 {
+		s.warnl(instr.Pos(), "failed to determine lock class")
+	}
 	newls := NewLockSet(ps.lockSet.sp).Plus(lock, s.stack)
 	s.lockOrder.Add(ps.lockSet, newls, s.stack)
 	ls2 := ps.lockSet.Plus(lock, s.stack)

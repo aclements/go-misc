@@ -104,6 +104,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 
 	"golang.org/x/tools/go/buildutil"
@@ -139,6 +140,8 @@ func main() {
 		debugFunctions[name] = true
 	}
 
+	roots := getDefaultRoots()
+
 	var conf loader.Config
 
 	// TODO: Check all reasonable arch/OS combos.
@@ -156,7 +159,11 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		rewriteSources(buildPkg, newSources)
+		var pkgRoots []string
+		if pkgName == "runtime" {
+			pkgRoots = roots
+		}
+		rewriteSources(buildPkg, pkgRoots, newSources)
 	}
 
 	ctxt := &build.Default
@@ -244,15 +251,16 @@ func main() {
 	s.heap.curM_locks = NewHeapObject("curM.locks")
 	curM_printlock := NewHeapObject("curM.printlock")
 
-	// TODO: Add roots from
-	// cmd/compile/internal/gc/builtin/runtime.go. Will need to
-	// add them as roots for PTA too. Maybe just synthesize a main
-	// function that calls all of them and use that as the root
-	// here.
-	for _, name := range []string{"newobject"} {
-		m := runtimePkg.Members[name].(*ssa.Function)
+	// Add roots to state.
+	for _, name := range roots {
+		m, ok := runtimePkg.Members[name].(*ssa.Function)
+		if !ok {
+			log.Fatalf("unknown root: %s", name)
+		}
 		s.addRoot(m)
 	}
+
+	// Analyze each root. Analysis may add more roots.
 	for i := 0; i < len(s.roots); i++ {
 		root := s.roots[i]
 
@@ -336,10 +344,55 @@ func withWriter(path string, f func(w io.Writer)) {
 	f(file)
 }
 
+// getDefaultRoots returns a list of functions in the runtime package
+// to use as roots.
+//
+// It parses $GOROOT/src/cmd/compile/internal/gc/builtin/runtime.go to
+// get this list, since these are the functions the compiler can
+// generate calls to.
+func getDefaultRoots() []string {
+	path := filepath.Join(runtime.GOROOT(), "src/cmd/compile/internal/gc/builtin/runtime.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		log.Fatalf("%s: %s", path, err)
+	}
+
+	var roots []string
+	for _, decl := range f.Decls {
+		decl, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		switch decl.Name.Name {
+		case "cmpstring", "eqstring",
+			"int64div", "uint64div", "int64mod", "uint64mod",
+			"float64toint64", "float64touint64",
+			"int64tofloat64", "uint64tofloat64":
+			// These are declared only in assembly.
+			continue
+		}
+		if strings.HasPrefix(decl.Name.Name, "race") {
+			// These functions are declared by runtime.go,
+			// but only exist in race mode.
+			continue
+		}
+		roots = append(roots, decl.Name.Name)
+	}
+	return roots
+}
+
 // rewriteSources rewrites all of the Go files in pkg to eliminate
-// runtime-isms and make them easier for go/ssa to process. It fills
-// rewritten with path -> new source mappings.
-func rewriteSources(pkg *build.Package, rewritten map[string][]byte) {
+// runtime-isms, make them easier for go/ssa to process, to add stubs
+// for internal functions, and to generate init-time calls to analysis
+// root functions. It fills rewritten with path -> new source
+// mappings.
+func rewriteSources(pkg *build.Package, roots []string, rewritten map[string][]byte) {
+	rootSet := make(map[string]struct{})
+	for _, root := range roots {
+		rootSet[root] = struct{}{}
+	}
+
 	for _, fname := range pkg.GoFiles {
 		path := filepath.Join(pkg.Dir, fname)
 
@@ -353,6 +406,7 @@ func rewriteSources(pkg *build.Package, rewritten map[string][]byte) {
 		isNosplit := map[ast.Decl]bool{}
 		rewriteStubs(f, isNosplit)
 		if pkg.Name == "runtime" {
+			addRootCalls(f, rootSet)
 			rewriteRuntime(f, isNosplit)
 		}
 
@@ -363,19 +417,27 @@ func rewriteSources(pkg *build.Package, rewritten map[string][]byte) {
 		}
 
 		if pkg.Name == "runtime" && fname == "stubs.go" {
-			// Add calls to runtime roots for PTA.
+			// Declare functions used during rewriting.
 			buf.Write([]byte(`
 // systemstack is transformed into a call to presystemstack, then
 // the operation, then postsystemstack. These functions are handled
 // specially.
 func rtcheck۰presystemstack() *g { return nil }
 func rtcheck۰postsystemstack(*g) { }
-
-var _ = newobject(nil)
 `))
 		}
 
 		rewritten[path] = buf.Bytes()
+	}
+
+	// Check that we found all of the roots.
+	if len(rootSet) > 0 {
+		fmt.Fprintf(os.Stderr, "unknown roots:")
+		for root := range rootSet {
+			fmt.Fprintf(os.Stderr, " %s", root)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+		os.Exit(1)
 	}
 }
 
@@ -579,6 +641,68 @@ func rewriteStubs(f *ast.File, isNosplit map[ast.Decl]bool) {
 			decl.Body = newDecl.Body
 			isNosplit[decl] = true
 		}
+	}
+}
+
+func addRootCalls(f *ast.File, rootSet map[string]struct{}) {
+	var body []ast.Stmt
+	for _, decl := range f.Decls {
+		decl, ok := decl.(*ast.FuncDecl)
+		if !ok || decl.Recv != nil {
+			continue
+		}
+		if _, ok := rootSet[decl.Name.Name]; !ok {
+			continue
+		}
+		delete(rootSet, decl.Name.Name)
+
+		// Construct a valid call.
+		args := []ast.Expr{}
+		for _, aspec := range decl.Type.Params.List {
+			n := len(aspec.Names)
+			if aspec.Names == nil {
+				n = 1
+			}
+			for i := 0; i < n; i++ {
+				switch atype := aspec.Type.(type) {
+				case *ast.ChanType, *ast.FuncType,
+					*ast.InterfaceType, *ast.MapType,
+					*ast.StarExpr:
+					args = append(args, &ast.Ident{Name: "nil"})
+				case *ast.StructType:
+					log.Fatal("not implemented: struct args")
+				case *ast.ArrayType, *ast.Ident, *ast.SelectorExpr:
+					name := fmt.Sprintf("x%d", len(body))
+					adecl := &ast.DeclStmt{
+						&ast.GenDecl{
+							Tok: token.VAR,
+							Specs: []ast.Spec{
+								&ast.ValueSpec{
+									Names: []*ast.Ident{{Name: name}},
+									Type:  atype,
+								},
+							},
+						},
+					}
+					body = append(body, adecl)
+					args = append(args, &ast.Ident{Name: name})
+				default:
+					log.Fatalf("unexpected function argument type: %s", aspec)
+				}
+			}
+		}
+		body = append(body, &ast.ExprStmt{&ast.CallExpr{
+			Fun:  &ast.Ident{Name: decl.Name.Name},
+			Args: args,
+		}})
+	}
+	if len(body) > 0 {
+		f.Decls = append(f.Decls,
+			&ast.FuncDecl{
+				Name: &ast.Ident{Name: "init"},
+				Type: &ast.FuncType{Params: &ast.FieldList{}},
+				Body: &ast.BlockStmt{List: body},
+			})
 	}
 }
 

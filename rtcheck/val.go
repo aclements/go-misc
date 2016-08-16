@@ -359,6 +359,14 @@ func (x DynConst) BinOp(op token.Token, y DynValue) DynValue {
 			log.Fatalf("bad shift %v", y)
 		}
 		return DynConst{constant.Shift(x.c, op, uint(s))}
+	case token.QUO:
+		if constant.Sign(yc) == 0 {
+			// TODO: It would be nice if we could report
+			// this for real.
+			log.Print("division by zero")
+			return dynUnknown{}
+		}
+		fallthrough
 	default:
 		return DynConst{constant.BinaryOp(x.c, op, yc)}
 	}

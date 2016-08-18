@@ -34,10 +34,10 @@ type frameValState struct {
 	budget int
 
 	// If flat is non-nil, parent, bind, and val must all be nil.
-	flat map[ssa.Instruction]DynValue
+	flat map[ssa.Value]DynValue
 
-	bind ssa.Instruction // Must also be ssa.Value
-	val  DynValue        // nil to unbind this instruction
+	bind ssa.Value
+	val  DynValue // nil to unbind this value
 }
 
 // heapValState tracks the known dynamic values of heap objects.
@@ -53,9 +53,9 @@ type heapValState struct {
 }
 
 // Get returns the dynamic value of val, or nil if unknown. val may be
-// a pure ssa.Value (not an ssa.Instruction), in which case it will be
-// resolved directly to a DynValue if possible. Otherwise, Get will
-// look up the value bound to val by a previous call to Extend.
+// a constant ssa.Value, in which case it will be resolved directly to
+// a DynValue if possible. Otherwise, Get will look up the value bound
+// to val by a previous call to Extend.
 func (vs ValState) Get(val ssa.Value) DynValue {
 	switch val := val.(type) {
 	case *ssa.Const:
@@ -66,15 +66,11 @@ func (vs ValState) Get(val ssa.Value) DynValue {
 	case *ssa.Global:
 		return DynGlobal{val}
 	}
-	instr, ok := val.(ssa.Instruction)
-	if !ok {
-		return nil
-	}
 	for frame := vs.frame; frame != nil; frame = frame.parent {
 		if frame.flat != nil {
-			return frame.flat[instr]
+			return frame.flat[val]
 		}
-		if frame.bind == instr {
+		if frame.bind == val {
 			return frame.val
 		}
 	}
@@ -97,7 +93,7 @@ func (vs ValState) GetHeap(h *HeapObject) DynValue {
 
 // Extend returns a new ValState that is like vs, but with bind bound
 // to dynamic value val. If dyn is dynUnknown, Extend unbinds val.
-// Extend is a no-op if called with a pure ssa.Value.
+// Extend is a no-op if called with a constant ssa.Value.
 func (vs ValState) Extend(val ssa.Value, dyn DynValue) ValState {
 	if _, ok := dyn.(dynUnknown); ok {
 		// "Unbind" val.
@@ -106,9 +102,8 @@ func (vs ValState) Extend(val ssa.Value, dyn DynValue) ValState {
 		}
 		dyn = nil
 	}
-	// We only care about binding instruction values.
-	instr, ok := val.(ssa.Instruction)
-	if !ok {
+	switch val.(type) {
+	case *ssa.Const, *ssa.Global, *ssa.Function, *ssa.Builtin:
 		return vs
 	}
 
@@ -116,7 +111,7 @@ func (vs ValState) Extend(val ssa.Value, dyn DynValue) ValState {
 	if vs.frame != nil {
 		budget = vs.frame.budget - 1
 	}
-	vs = ValState{&frameValState{vs.frame, budget, nil, instr, dyn}, vs.heap}
+	vs = ValState{&frameValState{vs.frame, budget, nil, val, dyn}, vs.heap}
 	if vs.frame.budget <= 0 {
 		vs.frame.flatten()
 	}
@@ -201,7 +196,7 @@ func (vs ValState) Do(instr ssa.Instruction) ValState {
 	return vs
 }
 
-func (fs *frameValState) flatten() map[ssa.Instruction]DynValue {
+func (fs *frameValState) flatten() map[ssa.Value]DynValue {
 	if fs == nil {
 		return nil
 	}
@@ -209,7 +204,7 @@ func (fs *frameValState) flatten() map[ssa.Instruction]DynValue {
 		return fs.flat
 	}
 	// Collect bindings into a map.
-	flat := make(map[ssa.Instruction]DynValue)
+	flat := make(map[ssa.Value]DynValue)
 	for fs2 := fs; fs2 != nil; fs2 = fs2.parent {
 		if fs2.flat != nil {
 			for k, v := range fs2.flat {
@@ -271,7 +266,7 @@ func (hs *heapValState) flatten() map[*HeapObject]DynValue {
 
 // EqualAt returns true if vs and o have equal dynamic values for each
 // value in at, and equal heap values for all heap objects.
-func (vs ValState) EqualAt(o ValState, at map[ssa.Instruction]struct{}) bool {
+func (vs ValState) EqualAt(o ValState, at map[ssa.Value]struct{}) bool {
 	if len(at) != 0 {
 		// Check frame state.
 		i1, i2 := vs.frame.flatten(), o.frame.flatten()
@@ -305,7 +300,7 @@ func (vs ValState) WriteTo(w io.Writer) {
 	}
 	f := vs.frame.flatten()
 	for bind, val := range f {
-		fmt.Fprintf(w, "%s = %v\n", bind.(ssa.Value).Name(), val)
+		fmt.Fprintf(w, "%s = %v\n", bind.Name(), val)
 	}
 }
 

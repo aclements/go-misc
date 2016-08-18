@@ -1103,7 +1103,7 @@ type funcInfo struct {
 	// each ssa.BasicBlock of this function. These are the values
 	// at entry to each block that may affect future control flow
 	// decisions.
-	ifDeps []map[ssa.Instruction]struct{}
+	ifDeps []map[ssa.Value]struct{}
 
 	// debugTree is the block trace debug tree for this function.
 	// If nil, this function is not being debug traced.
@@ -1437,7 +1437,7 @@ type PathState struct {
 	block   *ssa.BasicBlock
 	lockSet *LockSet
 	vs      ValState
-	mask    map[ssa.Instruction]struct{}
+	mask    map[ssa.Value]struct{}
 }
 
 type pathStateKey struct {

@@ -23,25 +23,39 @@ import (
 // determine the control flow into that phi. In effect, the phi has an
 // implicit dependency on which predecessor it came from, and we don't
 // model that.
-func livenessFor(f *ssa.Function, vals []ssa.Instruction) (deps []map[ssa.Instruction]struct{}) {
-	deps = make([]map[ssa.Instruction]struct{}, len(f.Blocks))
+func livenessFor(f *ssa.Function, vals []ssa.Instruction) (deps []map[ssa.Value]struct{}) {
+	deps = make([]map[ssa.Value]struct{}, len(f.Blocks))
 
-	// For each operand to val, keep the operand live in all
+	// For each operand to def, keep the operand live in all
 	// blocks between the operand's definition and here.
-	var walk func(def ssa.Instruction, use *ssa.BasicBlock)
-	walk = func(def ssa.Instruction, use *ssa.BasicBlock) {
+	var walk func(def ssa.Value, use *ssa.BasicBlock)
+	walk = func(def ssa.Value, use *ssa.BasicBlock) {
 		if _, ok := deps[use.Index][def]; ok {
 			return
 		}
 
 		if deps[use.Index] == nil {
-			deps[use.Index] = make(map[ssa.Instruction]struct{})
+			deps[use.Index] = make(map[ssa.Value]struct{})
 		}
 		deps[use.Index][def] = struct{}{}
 
-		if def.Block() == use {
-			// We've reached the defining block.
+		switch def := def.(type) {
+		case *ssa.Const, *ssa.Global, *ssa.Function, *ssa.Builtin:
+			// There are never defined.
 			return
+		case *ssa.Parameter, *ssa.FreeVar:
+			// These are defined at function entry, so
+			// flood to function entry.
+			if len(use.Preds) == 0 {
+				return
+			}
+		case ssa.Instruction:
+			if def.Block() == use {
+				// We've reached the defining block.
+				return
+			}
+		default:
+			log.Fatalf("unexpected value definition type %s (%T)", def, def)
 		}
 
 		if len(use.Preds) == 0 {
@@ -54,8 +68,8 @@ func livenessFor(f *ssa.Function, vals []ssa.Instruction) (deps []map[ssa.Instru
 	}
 
 	visited := make(map[ssa.Instruction]struct{})
-	var doVal func(val ssa.Instruction)
-	doVal = func(val ssa.Instruction) {
+	var doInstr func(val ssa.Instruction)
+	doInstr = func(val ssa.Instruction) {
 		if _, ok := visited[val]; ok {
 			return
 		}
@@ -66,39 +80,38 @@ func livenessFor(f *ssa.Function, vals []ssa.Instruction) (deps []map[ssa.Instru
 			// each operand if it came from the
 			// corresponding predecessor.
 			if deps[phi.Block().Index] == nil {
-				deps[phi.Block().Index] = make(map[ssa.Instruction]struct{})
+				deps[phi.Block().Index] = make(map[ssa.Value]struct{})
 			}
 			for i, rand := range phi.Edges {
-				rand, ok := rand.(ssa.Instruction)
-				if !ok {
-					continue
-				}
 				deps[phi.Block().Index][rand] = struct{}{}
 				walk(rand, phi.Block().Preds[i])
 
 				// Recursively depend on the inputs to
 				// this operand.
-				doVal(rand)
+				if instr, ok := val.(ssa.Instruction); ok {
+					doInstr(instr)
+				}
 			}
 		} else {
 			// Regular instruction uses all of their operands.
 			rands := val.Operands(nil)
 			for _, rand := range rands {
-				rand, ok := (*rand).(ssa.Instruction)
-				if !ok {
+				if *rand == nil {
 					continue
 				}
-				walk(rand, val.Block())
+				walk(*rand, val.Block())
 
 				// Recursively depend on the inputs to
 				// the operands.
-				doVal(rand)
+				if instr, ok := (*rand).(ssa.Instruction); ok {
+					doInstr(instr)
+				}
 			}
 		}
 	}
 
 	for _, val := range vals {
-		doVal(val)
+		doInstr(val)
 	}
 	return deps
 }

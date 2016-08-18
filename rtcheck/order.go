@@ -23,7 +23,7 @@ import (
 // LockOrder tracks a lock graph and reports cycles that prevent the
 // graph from being a partial order.
 type LockOrder struct {
-	sp   *StringSpace
+	lca  *LockClassAnalysis
 	fset *token.FileSet
 	m    map[lockOrderEdge]map[lockOrderInfo]struct{}
 
@@ -43,7 +43,7 @@ type lockOrderInfo struct {
 // reports will be resolved using fset.
 func NewLockOrder(fset *token.FileSet) *LockOrder {
 	return &LockOrder{
-		sp:   nil,
+		lca:  nil,
 		fset: fset,
 		m:    make(map[lockOrderEdge]map[lockOrderInfo]struct{}),
 	}
@@ -54,10 +54,10 @@ func NewLockOrder(fset *token.FileSet) *LockOrder {
 // acquired at stack.
 func (lo *LockOrder) Add(locked *LockSet, locking *LockSet, stack *StackFrame) {
 	lo.cycles = nil
-	if lo.sp == nil {
-		lo.sp = locked.sp
-	} else if lo.sp != locked.sp {
-		panic("locks come from a different StringSpace")
+	if lo.lca == nil {
+		lo.lca = locked.lca
+	} else if locked.lca != nil && lo.lca != locked.lca {
+		panic("locks come from a different LockClassAnalyses")
 	}
 
 	for i := 0; i < locked.bits.BitLen(); i++ {
@@ -69,7 +69,7 @@ func (lo *LockOrder) Add(locked *LockSet, locking *LockSet, stack *StackFrame) {
 					// only care about how we got
 					// from locked to locking.
 					lockedStack := locked.stacks[i]
-					fromStack, toStack := lockedStack.TrimCommonPrefix(stack)
+					fromStack, toStack := lockedStack.TrimCommonPrefix(stack, 1)
 
 					// Add info to edge.
 					edge := lockOrderEdge{i, j}
@@ -153,6 +153,10 @@ func (lo *LockOrder) WriteToDot(w io.Writer) {
 	lo.writeToDot(w)
 }
 
+func (lo *LockOrder) name(id int) string {
+	return lo.lca.Lookup(id).String()
+}
+
 func (lo *LockOrder) writeToDot(w io.Writer) map[lockOrderEdge]string {
 	// TODO: Compute the transitive reduction (of the SCC
 	// condensation, I guess) to reduce noise.
@@ -188,7 +192,7 @@ func (lo *LockOrder) writeToDot(w io.Writer) map[lockOrderEdge]string {
 		}
 		id := fmt.Sprintf("edge%d-%d", edge.fromId, edge.toId)
 		edgeIds[edge] = id
-		tooltip := fmt.Sprintf("%s -> %s", lo.sp.s[edge.fromId], lo.sp.s[edge.toId])
+		tooltip := fmt.Sprintf("%s -> %s", lo.name(edge.fromId), lo.name(edge.toId))
 		// We set the edge ID so Javascript can find the
 		// element in the SVG.
 		fmt.Fprintf(w, "  %s -> %s [id=%q,tooltip=%q%s];\n", nid(edge.fromId), nid(edge.toId), id, tooltip, props)
@@ -201,7 +205,7 @@ func (lo *LockOrder) writeToDot(w io.Writer) map[lockOrderEdge]string {
 		if nodes.Bit(i) == 1 {
 			// We set the fill color to white so
 			// mouseovers on this node work nicely.
-			fmt.Fprintf(w, "  %s [label=%q,style=filled,fillcolor=white];\n", nid(i), lo.sp.s[i])
+			fmt.Fprintf(w, "  %s [label=%q,style=filled,fillcolor=white];\n", nid(i), lo.name(i))
 		}
 	}
 	fmt.Fprintf(w, "}\n")
@@ -233,8 +237,8 @@ func (lo *LockOrder) renderInfo(edge lockOrderEdge, info lockOrderInfo) rendered
 	}
 	return renderedPath{
 		rootFn.String(),
-		renderStack(fromStack, "acquires "+lo.sp.s[edge.fromId]),
-		renderStack(toStack, "acquires "+lo.sp.s[edge.toId]),
+		renderStack(fromStack, "acquires "+lo.name(edge.fromId)),
+		renderStack(toStack, "acquires "+lo.name(edge.toId)),
 	}
 }
 
@@ -265,7 +269,7 @@ func (lo *LockOrder) Check(w io.Writer) {
 			if i != 0 {
 				fmt.Fprintf(w, " -> ")
 			}
-			fmt.Fprintf(w, lo.sp.s[node])
+			fmt.Fprintf(w, lo.name(node))
 		}
 		fmt.Fprintf(w, "\n")
 
@@ -273,7 +277,7 @@ func (lo *LockOrder) Check(w io.Writer) {
 			edge := lockOrderEdge{cycle[i], cycle[i+1]}
 			infos := lo.m[edge]
 
-			fmt.Fprintf(w, "  %d path(s) acquire %s then %s:\n", len(infos), lo.sp.s[edge.fromId], lo.sp.s[edge.toId])
+			fmt.Fprintf(w, "  %d path(s) acquire %s then %s:\n", len(infos), lo.name(edge.fromId), lo.name(edge.toId))
 			for info, _ := range infos {
 				rinfo := lo.renderInfo(edge, info)
 				printInfo(rinfo)
@@ -351,7 +355,7 @@ func (lo *LockOrder) WriteToHTML(w io.Writer) {
 		}
 		jsonEdges = append(jsonEdges, jsonEdge{
 			EdgeID: edgeIds[edge],
-			Locks:  [2]string{lo.sp.s[edge.fromId], lo.sp.s[edge.toId]},
+			Locks:  [2]string{lo.name(edge.fromId), lo.name(edge.toId)},
 			Paths:  paths,
 		})
 	}

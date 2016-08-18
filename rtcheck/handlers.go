@@ -57,24 +57,24 @@ func init() {
 }
 
 func handleRuntimeLock(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
-	// TODO: Most of the lock(&mheap_.lock) have an empty
-	// points-to set, which means we can't track that lock.
-	lock := s.pta.Queries[instr.(*ssa.Call).Call.Args[0]].PointsTo()
-	if len(lock.Labels()) == 0 {
-		s.warnl(instr.Pos(), "failed to determine lock class")
+	lock, err := s.lca.Get(instr.(*ssa.Call).Call.Args[0])
+	if err != nil {
+		s.warnl(instr.Pos(), "%s", err)
+	} else {
+		newls := NewLockSet().Plus(lock, s.stack)
+		s.lockOrder.Add(ps.lockSet, newls, s.stack)
+		ls2 := ps.lockSet.Plus(lock, s.stack)
+		// If we self-deadlocked, terminate this path.
+		//
+		// TODO: This is only sound if we know it's the same lock
+		// *instance*.
+		if ps.lockSet == ls2 {
+			s.warnp(instr.Pos(), "possible self-deadlock %s %s; trimming path", ps.lockSet, lock)
+			return newps
+		}
+		ps.lockSet = ls2
 	}
-	newls := NewLockSet(ps.lockSet.sp).Plus(lock, s.stack)
-	s.lockOrder.Add(ps.lockSet, newls, s.stack)
-	ls2 := ps.lockSet.Plus(lock, s.stack)
-	// If we self-deadlocked, terminate this path.
-	//
-	// TODO: This is only sound if we know it's the same lock
-	// *instance*.
-	if ps.lockSet == ls2 && len(lock.Labels()) > 0 {
-		s.warnp(instr.Pos(), "possible self-deadlock %s %s; trimming path", ps.lockSet, lock)
-		return newps
-	}
-	ps.lockSet = ls2
+
 	// m.locks++
 	mlocks := ps.vs.GetHeap(s.heap.curM_locks).(DynConst)
 	nlocks, _ := constant.Int64Val(mlocks.c)
@@ -88,18 +88,26 @@ func handleRuntimeLock(s *state, ps PathState, instr ssa.Instruction, newps []Pa
 }
 
 func handleRuntimeUnlock(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
-	lock := s.pta.Queries[instr.(*ssa.Call).Call.Args[0]].PointsTo()
-	held := ps.lockSet.ContainsAny(lock) || len(lock.Labels()) == 0
-	ps.lockSet = ps.lockSet.Minus(lock)
+	held := false
+	lock, err := s.lca.Get(instr.(*ssa.Call).Call.Args[0])
+	if err != nil {
+		s.warnl(instr.Pos(), "%s", err)
+	} else {
+		held = ps.lockSet.Contains(lock)
+		ps.lockSet = ps.lockSet.Minus(lock)
+		if !held {
+			// TODO: Perhaps warn more stringently if this is a
+			// single instance lock class, though even then we
+			// could be confused by control flow.
+			s.warnl(instr.Pos(), "possible unlock of unlocked lock")
+		}
+	}
+
 	// m.locks-- if lock is held. We only do this conditionally
 	// because sometimes our handling of correlated control flow
 	// leads to *three* paths: both lock and unlock, neither lock
 	// or unlock, and just unlock.
-	//
-	// We also do this if the label set is empty, since in that
-	// case ContainsAny vacuously returned false, but lock() still
-	// increased m.locks.
-	if held || len(lock.Labels()) == 0 {
+	if held {
 		mlocks := ps.vs.GetHeap(s.heap.curM_locks).(DynConst)
 		if constant.Compare(mlocks.c, token.LEQ, constant.MakeInt64(0)) {
 			// Terminate path.
@@ -107,18 +115,13 @@ func handleRuntimeUnlock(s *state, ps PathState, instr ssa.Instruction, newps []
 			return newps
 		}
 		ps.vs = ps.vs.ExtendHeap(s.heap.curM_locks, mlocks.BinOp(token.SUB, DynConst{constant.MakeInt64(1)}))
-	} else {
-		// TODO: Perhaps warn more stringently if this is a
-		// single instance lock class, though even then we
-		// could be confused by control flow.
-		s.warnl(instr.Pos(), "possible unlock of unlocked lock")
 	}
 	return append(newps, ps)
 }
 
 func handleRuntimeCasgstatus(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
 	// Equivalent to acquiring and releasing _Gscan.
-	gscan := NewLockSet(ps.lockSet.sp).PlusLabel("_Gscan", s.stack)
+	gscan := NewLockSet().Plus(s.gscanLock, s.stack)
 	s.lockOrder.Add(ps.lockSet, gscan, s.stack)
 	return append(newps, ps)
 }
@@ -127,12 +130,12 @@ func handleRuntimeCastogscanstatus(s *state, ps PathState, instr ssa.Instruction
 	// This is a conditional acquisition of _Gscan. _Gscan is
 	// acquired on the true branch and not acquired on the false
 	// branch. Either way it participates in the lock order.
-	gscan := NewLockSet(ps.lockSet.sp).PlusLabel("_Gscan", s.stack)
+	gscan := NewLockSet().Plus(s.gscanLock, s.stack)
 	s.lockOrder.Add(ps.lockSet, gscan, s.stack)
 
 	psT, psF := ps, ps
 
-	psT.lockSet = psT.lockSet.PlusLabel("_Gscan", s.stack)
+	psT.lockSet = psT.lockSet.Plus(s.gscanLock, s.stack)
 	psT.vs = psT.vs.Extend(instr.(ssa.Value), DynConst{constant.MakeBool(true)})
 
 	psF.vs = psF.vs.Extend(instr.(ssa.Value), DynConst{constant.MakeBool(false)})
@@ -142,7 +145,7 @@ func handleRuntimeCastogscanstatus(s *state, ps PathState, instr ssa.Instruction
 
 func handleRuntimeCasfrom_Gscanstatus(s *state, ps PathState, instr ssa.Instruction, newps []PathState) []PathState {
 	// Unlock of _Gscan.
-	ps.lockSet = ps.lockSet.MinusLabel("_Gscan")
+	ps.lockSet = ps.lockSet.Minus(s.gscanLock)
 	return append(newps, ps)
 }
 

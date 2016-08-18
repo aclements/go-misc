@@ -194,9 +194,6 @@ func main() {
 		//Log:            os.Stderr,
 	}
 
-	// Register arguments to runtime.lock/unlock for PTA.
-	registerLockQueries(runtimePkg, &ptrConfig)
-
 	// Run pointer analysis.
 	pta, err := pointer.Analyze(&ptrConfig)
 	if err != nil {
@@ -224,7 +221,6 @@ func main() {
 		})
 	}
 
-	stringSpace := NewStringSpace()
 	s := state{
 		fset: fset,
 		cg:   cg,
@@ -236,6 +232,7 @@ func main() {
 		roots:   nil,
 		rootSet: make(map[*ssa.Function]struct{}),
 	}
+	s.gscanLock = s.lca.NewLockClass("_Gscan", false)
 
 	// Create heap objects we care about.
 	//
@@ -281,7 +278,7 @@ func main() {
 
 		// Create the initial PathState.
 		ps := PathState{
-			lockSet: NewLockSet(stringSpace),
+			lockSet: NewLockSet(),
 			vs:      vs,
 		}
 
@@ -808,6 +805,14 @@ func rewriteRuntime(f *ast.File, isNosplit map[ast.Decl]bool) {
 				}
 
 			case "traceEvent", "cgoContextPCs", "callCgoSymbolizer":
+				// TODO: If we handle traceEvent, we
+				// still can't handle inter-procedural
+				// correlated control flow between
+				// traceAcquireBuffer and
+				// traceReleaseBuffer, so hard-code
+				// that traceReleaseBuffer releases
+				// runtime.trace.bufLock.
+				//
 				// TODO: A bunch of false positives
 				// come from callCgoSymbolizer and
 				// cgoContextPCs, which dynamically
@@ -878,27 +883,6 @@ func lookupMembers(pkg *ssa.Package, out map[string]interface{}) {
 	}
 }
 
-func registerLockQueries(pkg *ssa.Package, ptrConfig *pointer.Config) {
-	for _, member := range pkg.Members {
-		fn, ok := member.(*ssa.Function)
-		if !ok {
-			continue
-		}
-		for _, block := range fn.Blocks {
-			for _, inst := range block.Instrs {
-				call, ok := inst.(ssa.CallInstruction)
-				if !ok {
-					continue
-				}
-				target := call.Common().StaticCallee()
-				if target == fns.lock || target == fns.unlock {
-					ptrConfig.AddQuery(call.Common().Args[0])
-				}
-			}
-		}
-	}
-}
-
 // StringSpace interns strings into small integers.
 type StringSpace struct {
 	m map[string]int
@@ -931,24 +915,33 @@ func (sp *StringSpace) TryIntern(str string) (int, bool) {
 
 // LockSet represents a set of locks and where they were acquired.
 type LockSet struct {
-	sp     *StringSpace
+	lca    *LockClassAnalysis
 	bits   big.Int
 	stacks map[int]*StackFrame
 }
 
 type LockSetKey string
 
-func NewLockSet(sp *StringSpace) *LockSet {
-	return &LockSet{sp: sp}
+func NewLockSet() *LockSet {
+	return &LockSet{}
 }
 
 func (set *LockSet) clone() *LockSet {
-	out := &LockSet{sp: set.sp, stacks: map[int]*StackFrame{}}
+	out := &LockSet{lca: set.lca, stacks: map[int]*StackFrame{}}
 	out.bits.Set(&set.bits)
 	for k, v := range set.stacks {
 		out.stacks[k] = v
 	}
 	return out
+}
+
+func (set *LockSet) withLCA(lca *LockClassAnalysis) *LockSet {
+	if set.lca == nil {
+		set.lca = lca
+	} else if set.lca != lca {
+		panic("cannot mix locks from different LockClassAnalyses")
+	}
+	return set
 }
 
 // Key returns a string such that two LockSet's Keys are == iff both
@@ -977,7 +970,7 @@ func (set *LockSet) HashKey() string {
 // Equal returns whether set and set2 contain the same locks acquired
 // at the same stacks.
 func (set *LockSet) Equal(set2 *LockSet) bool {
-	if set.sp != set2.sp {
+	if set.lca != set2.lca {
 		return false
 	}
 	if set.bits.Cmp(&set2.bits) != 0 {
@@ -991,48 +984,21 @@ func (set *LockSet) Equal(set2 *LockSet) bool {
 	return true
 }
 
-// Contains returns true if set contains any of the locks in s.
-func (set *LockSet) ContainsAny(s pointer.PointsToSet) bool {
-	for _, label := range s.Labels() {
-		id, ok := set.sp.TryIntern(label.String())
-		if ok && set.bits.Bit(id) != 0 {
-			return true
-		}
-	}
-	return false
+// Contains returns true if set contains lock class lc.
+func (set *LockSet) Contains(lc *LockClass) bool {
+	return set.lca == lc.Analysis() && set.bits.Bit(lc.Id()) != 0
 }
 
-// Plus returns a LockSet that extends set with all locks in s,
-// acquired at stack. If a lock in s is already in set, it does not
-// get re-added. If all locks in s are in set, it returns set.
-func (set *LockSet) Plus(s pointer.PointsToSet, stack *StackFrame) *LockSet {
-	// TODO: Using the label strings is a hack. Internally, the
-	// pointer package already represents PointsToSet as a sparse
-	// integer set, but that isn't exposed. :(
-	out := set
-	for _, label := range s.Labels() {
-		id := out.sp.Intern(label.String())
-		if out.bits.Bit(id) != 0 {
-			continue
-		}
-		if out == set {
-			out = out.clone()
-		}
-		out.bits.SetBit(&out.bits, id, 1)
-		out.stacks[id] = stack
-	}
-	return out
-}
-
-// PlusLabel is like Plus, but for a specific string lock label.
-func (set *LockSet) PlusLabel(label string, stack *StackFrame) *LockSet {
-	id := set.sp.Intern(label)
-	if set.bits.Bit(id) != 0 {
+// Plus returns a LockSet that extends set with lock class lc,
+// acquired at stack. If lc is already in set, it does not get
+// re-added and Plus returns set.
+func (set *LockSet) Plus(lc *LockClass, stack *StackFrame) *LockSet {
+	if set.bits.Bit(lc.Id()) != 0 {
 		return set
 	}
-	out := set.clone()
-	out.bits.SetBit(&out.bits, id, 1)
-	out.stacks[id] = stack
+	out := set.clone().withLCA(lc.Analysis())
+	out.bits.SetBit(&out.bits, lc.Id(), 1)
+	out.stacks[lc.Id()] = stack
 	return out
 }
 
@@ -1046,7 +1012,7 @@ func (set *LockSet) Union(o *LockSet) *LockSet {
 		return set
 	}
 
-	out := set.clone()
+	out := set.clone().withLCA(o.lca)
 	out.bits.Or(&out.bits, &o.bits)
 	for k, v := range o.stacks {
 		if out.stacks[k] == nil {
@@ -1056,33 +1022,15 @@ func (set *LockSet) Union(o *LockSet) *LockSet {
 	return out
 }
 
-// Minus returns a LockSet that is like set, but does not contain any
-// of the locks in s.
-func (set *LockSet) Minus(s pointer.PointsToSet) *LockSet {
-	out := set
-	for _, label := range s.Labels() {
-		id := out.sp.Intern(label.String())
-		if out.bits.Bit(id) == 0 {
-			continue
-		}
-		if out == set {
-			out = out.clone()
-		}
-		out.bits.SetBit(&out.bits, id, 0)
-		delete(out.stacks, id)
-	}
-	return out
-}
-
-// MinusLabel is like Minus, but for a specific string lock label.
-func (set *LockSet) MinusLabel(label string) *LockSet {
-	id := set.sp.Intern(label)
-	if set.bits.Bit(id) == 0 {
+// Minus returns a LockSet that is like set, but does not contain lock
+// class lc.
+func (set *LockSet) Minus(lc *LockClass) *LockSet {
+	if set.bits.Bit(lc.Id()) == 0 {
 		return set
 	}
-	out := set.clone()
-	out.bits.SetBit(&out.bits, id, 0)
-	delete(out.stacks, id)
+	out := set.clone().withLCA(lc.Analysis())
+	out.bits.SetBit(&out.bits, lc.Id(), 0)
+	delete(out.stacks, lc.Id())
 	return out
 }
 
@@ -1095,7 +1043,7 @@ func (set *LockSet) String() string {
 				b = append(b, ',')
 			}
 			first = false
-			b = append(b, set.sp.s[i]...)
+			b = append(b, set.lca.Lookup(i).String()...)
 		}
 	}
 	return string(append(b, '}'))
@@ -1209,14 +1157,14 @@ func (sf *StackFrame) Intern() *StackFrame {
 
 // TrimCommonPrefix eliminates the outermost frames that sf and other
 // have in common and returns their distinct suffixes.
-func (sf *StackFrame) TrimCommonPrefix(other *StackFrame) (*StackFrame, *StackFrame) {
+func (sf *StackFrame) TrimCommonPrefix(other *StackFrame, minLen int) (*StackFrame, *StackFrame) {
 	var buf [64]ssa.Instruction
 	f1 := sf.Flatten(buf[:])
 	f2 := other.Flatten(f1[len(f1):cap(f1)])
 
 	// Find the common prefix.
 	var common int
-	for common < len(f1) && common < len(f2) && f1[common] == f2[common] {
+	for common < len(f1)-minLen && common < len(f2)-minLen && f1[common] == f2[common] {
 		common++
 	}
 
@@ -1249,6 +1197,9 @@ type state struct {
 		curM       *HeapObject
 		curM_locks *HeapObject
 	}
+
+	lca       LockClassAnalysis
+	gscanLock *LockClass
 
 	lockOrder *LockOrder
 
@@ -1822,19 +1773,6 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 			// current lock sets to exitLockSets.
 			//
 			// TODO: Handle defers.
-
-			// Special case: we can't handle
-			// inter-procedural correlated control flow
-			// between traceAcquireBuffer and
-			// traceReleaseBuffer, so hard-code that
-			// traceReleaseBuffer releases
-			// runtime.trace.bufLock.
-			if f.Name() == "traceReleaseBuffer" {
-				pathStates.MapInPlace(func(ps PathState) PathState {
-					ps.lockSet = ps.lockSet.MinusLabel("runtime.trace.bufLock")
-					return ps
-				})
-			}
 
 			pathStates.ForEach(func(ps PathState) {
 				exitStates.Add(ps.ExitState())

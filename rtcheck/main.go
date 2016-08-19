@@ -1287,11 +1287,12 @@ func (s *state) callees(call ssa.CallInstruction) []*ssa.Function {
 // walkFunction explores f, starting at the given path state. It
 // returns the set of path states possible on exit from f.
 //
-// ps should have block and mask set to nil, and ps.vs should be
-// restricted to just heap values.
+// ps should have block and mask set to nil, and ps.vs may contain
+// heap values and parameter/free variable values for this function.
+// ps.vs should not contain anything else.
 //
 // Path states returned from walkFunction will likewise have block and
-// mask set to nil and ps.vs restricted to just heap values.
+// mask set to nil and ps.vs will be restricted to just heap values.
 //
 // This implements the lockset algorithm from Engler and Ashcroft,
 // SOSP 2003, plus simple path sensitivity to reduce mistakes from
@@ -1678,6 +1679,19 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 					// states to.
 					newps = handler(s, ps, instr, newps)
 				} else {
+					// Bind arguments values if
+					// this function is marked for
+					// argument tracking.
+					psEntry := psEntry
+					if trackArgs[fn.String()] {
+						for i, arg := range instr.(*ssa.Call).Call.Args {
+							aval := ps.vs.Get(arg)
+							if aval != nil {
+								psEntry.vs = psEntry.vs.Extend(fn.Params[i], aval)
+							}
+						}
+					}
+
 					s.walkFunction(fn, psEntry).ForEach(func(ps2 PathState) {
 						ps.lockSet = ps2.lockSet
 						ps.vs.heap = ps2.vs.heap

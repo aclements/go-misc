@@ -26,6 +26,18 @@ type callHandler func(s *state, ps PathState, instr ssa.Instruction, newps []Pat
 // implicit morestack.
 var callHandlers map[string]callHandler
 
+// trackArgs is a set of function names (ssa.Function.String()) to
+// track the argument values of.
+var trackArgs = map[string]bool{
+	// copystack's locking behavior is significantly affected by
+	// the "sync" argument.
+	"runtime.copystack": true,
+
+	// TODO: chan.go:recv takes an unlock closure. Can we track
+	// that? Pointer analysis says the unlock function could be
+	// selunlock, which has a path that unlocks nothing.
+}
+
 func init() {
 	// Go's initialization order rule doesn't distinguish between
 	// function pointers and function calls, so we have to

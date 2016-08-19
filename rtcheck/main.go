@@ -291,7 +291,7 @@ func main() {
 				return
 			}
 			s.warnl(root.Pos(), "locks at return from root %s: %s", root, ps.lockSet)
-			s.warnl(root.Pos(), "\t(likely analysis failed to match control flow for unlock)\n")
+			s.warnl(root.Pos(), "\t(likely analysis failed to match control flow for unlock)")
 		})
 	}
 
@@ -1203,6 +1203,10 @@ type state struct {
 
 	lockOrder *LockOrder
 
+	// messages is the set of warning strings that have been
+	// emitted.
+	messages map[string]struct{}
+
 	// roots is the list of root functions to visit.
 	roots   []*ssa.Function
 	rootSet map[*ssa.Function]struct{}
@@ -1215,21 +1219,31 @@ type state struct {
 }
 
 func (s *state) warnl(pos token.Pos, format string, args ...interface{}) {
-	// TODO: Suppress duplicate warnings.
-	//
 	// TODO: Have a different message for path terminating conditions.
+	var msg bytes.Buffer
 	if pos.IsValid() {
-		fmt.Printf("%s: ", s.fset.Position(pos))
+		fmt.Fprintf(&msg, "%s: ", s.fset.Position(pos))
 	}
-	fmt.Printf(format+"\n", args...)
+	fmt.Fprintf(&msg, format+"\n", args...)
+	if _, ok := s.messages[msg.String()]; ok {
+		return
+	}
+	if s.messages == nil {
+		s.messages = make(map[string]struct{})
+	}
+	s.messages[msg.String()] = struct{}{}
+	fmt.Print(msg.String())
 }
 
 func (s *state) warnp(pos token.Pos, format string, args ...interface{}) {
-	s.warnl(pos, format+" at", args...)
+	var buf bytes.Buffer
 	for stack := s.stack; stack != nil; stack = stack.parent {
-		fmt.Printf("    %s\n", stack.call.Parent().String())
-		fmt.Printf("        %s\n", s.fset.Position(stack.call.Pos()))
+		fmt.Fprintf(&buf, "    %s\n", stack.call.Parent().String())
+		fmt.Fprintf(&buf, "        %s\n", s.fset.Position(stack.call.Pos()))
 	}
+	tb := strings.TrimSuffix(buf.String(), "\n")
+	args = append(args, tb)
+	s.warnl(pos, format+" at\n%s", args...)
 }
 
 // addRoot adds fn as a root of the control flow graph to visit.

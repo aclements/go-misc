@@ -60,7 +60,7 @@ function showEdge(strings, edge) {
             // If we elided frames, update the show link.
             if (elided.length === 1) {
                 // No point in eliding one frame.
-                elidedDiv.hide();
+                elideDiv.hide();
             } else if (elided.length > 0) {
                 elideDiv.text("... show " + elided.length + " elided frames ...").css({color: "#00e", cursor: "pointer"});
                 $(elided).hide();

@@ -28,13 +28,16 @@ TEXT ·decodeVarintAsmLoop(SB),NOSPLIT,$0-40
 	XORL	DX, DX		// Value
 
 loop:
-	CMPL	SI, AX
+	CMPL	SI, AX		// (fused with JEQ)
 	JEQ	bad		// Reached end of buffer or >10 bytes
 
 	MOVBLZX	(SI)(BX*1), DI	// Load next byte
 	INCL	SI
-	BTRL	$7, DI		// Is bit 7 set? Clear bit 7.
-	JNC	last		// If not set, this is the final byte
+	// This could be a BTRL $7, DI, but this is simpler and
+	// just as fast thanks to macro-op fusion.
+	TESTL	$0x80, DI	// Is bit 7 set? (fused with JZ)
+	JZ	last
+	ANDL	$0x7f, DI	// Clear bit 7
 	SHLQ	CL, DI		// value |= value << shift
 	ORQ	DI, DX
 	ADDL	$7, CX		// shift += 7

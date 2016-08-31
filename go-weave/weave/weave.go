@@ -31,6 +31,8 @@ type Scheduler struct {
 	// run. The waking thread must immediately block on
 	// thread.wake or exit.
 	wakeSched chan void
+
+	trace []traceEntry
 }
 
 var globalSched *Scheduler
@@ -78,10 +80,11 @@ func (s *Scheduler) Run(main func()) {
 		s.curThread = nil
 		s.goErr = nil
 		s.wakeSched = make(chan void)
+		s.trace = nil
 		s.goNoSched(main)
 		s.scheduler()
 		if s.goErr != nil {
-			panic(s.goErr)
+			panic(errorWithTrace{s.goErr, s.trace})
 		}
 		if debug {
 			fmt.Println("run done")

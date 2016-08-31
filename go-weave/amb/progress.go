@@ -5,35 +5,105 @@
 package amb
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
 var count int64
-var progressDone chan bool
+
+var progress struct {
+	printLock sync.Mutex
+	stop      chan struct{}
+	done      chan struct{}
+}
+
+const resetLine = "\r\x1b[2K"
 
 func startProgress() {
-	const resetLine = "\r\x1b[2K"
+	progress.stop = make(chan struct{})
+	progress.done = make(chan struct{})
 
-	progressDone = make(chan bool)
 	go func() {
+		// Redirect process stdout and stderr.
+		//
+		// Alternatively, we could dup our pipes over stdout
+		// and stderr, but then we're in the way of any
+		// runtime debug output.
+		origStdout, origStderr := os.Stdout, os.Stderr
+		newStdoutR, newStdoutW, err := os.Pipe()
+		if err != nil {
+			log.Fatalf("failed to create stdout self-pipe: %v", err)
+		}
+		newStderrR, newStderrW, err := os.Pipe()
+		if err != nil {
+			log.Fatalf("failed to create stderr self-pipe: %v", err)
+		}
+
+		defer func() {
+			os.Stdout, os.Stderr = origStdout, origStderr
+			// Stop the feeder. It will close the write sides.
+			newStdoutR.Close()
+			newStderrR.Close()
+		}()
+		os.Stdout, os.Stderr = newStdoutW, newStderrW
+		go pipeFeeder(newStdoutR, origStdout, origStdout)
+		go pipeFeeder(newStderrR, origStderr, origStderr)
+
+		report := func() {
+			progress.printLock.Lock()
+			fmt.Fprintf(origStderr, "%s%d done", resetLine, atomic.LoadInt64(&count))
+			progress.printLock.Unlock()
+		}
+		ticker := time.NewTicker(100 * time.Millisecond)
 		for {
-			buf := fmt.Sprintf("%s%d done", resetLine, atomic.LoadInt64(&count))
-			fmt.Fprint(os.Stderr, buf)
+			report()
+
 			select {
-			case <-time.After(100 * time.Millisecond):
-			case <-progressDone:
-				fmt.Fprintf(os.Stderr, "%s%d done\n", resetLine, atomic.LoadInt64(&count))
-				close(progressDone)
-				return
+			case <-ticker.C:
+			case <-progress.stop:
+				report()
+				break
 			}
 		}
+		ticker.Stop()
+		close(progress.done)
 	}()
 }
 
+func pipeFeeder(r, w, pstream *os.File) {
+	var buf [256]byte
+	bol := true
+	for {
+		n, err := r.Read(buf[:])
+		if n == 0 {
+			break
+		}
+		if bol {
+			bol = false
+			// Stop progress printing.
+			progress.printLock.Lock()
+			// Clear the progress line.
+			pstream.WriteString(resetLine)
+		}
+		// Print this message.
+		if n, err = w.Write(buf[:n]); err != nil {
+			panic(err)
+		}
+		if bytes.HasSuffix(buf[:n], []byte("\n")) {
+			// Resume progress printing.
+			progress.printLock.Unlock()
+			bol = true
+		}
+	}
+	w.Close()
+}
+
 func stopProgress() {
-	progressDone <- true
-	<-progressDone
+	close(progress.stop)
+	<-progress.done
 }

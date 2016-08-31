@@ -11,27 +11,39 @@ import (
 	"github.com/aclements/go-misc/go-weave/amb"
 )
 
+// TODO: Implement simple partial order reduction. Group all pending
+// read operations and schedule them as a single unit.
+
+// TODO: Implement a PCT scheduler (https://www.microsoft.com/en-us/research/publication/a-randomized-scheduler-with-probabilistic-guarantees-of-finding-bugs/)
+
 type Scheduler struct {
 	Strategy amb.Strategy
 
 	as amb.Scheduler
 
-	nextid               int
-	runnable             []*thread
-	blocked              []*thread
-	runThread, curThread *thread
-	goErr                interface{}
+	nextid    int
+	runnable  []*thread
+	blocked   []*thread
+	curThread *thread
+	goErr     interface{}
+
+	// wakeSched wakes the scheduler to select the next thread to
+	// run. The waking thread must immediately block on
+	// thread.wake or exit.
+	wakeSched chan void
 }
 
 var globalSched *Scheduler
+
+type void struct{}
 
 type thread struct {
 	sched   *Scheduler
 	id      int
 	index   int // Index in Scheduler.runnable or .blocked
 	blocked bool
-	wake    chan bool // Send true to continue, false to abort
-	aborted chan bool
+
+	wake chan void // Send void{} to wake this thread
 }
 
 func (t *thread) String() string {
@@ -41,7 +53,7 @@ func (t *thread) String() string {
 const debug = false
 
 func (s *Scheduler) newThread() *thread {
-	thr := &thread{s, s.nextid, -1, false, make(chan bool), make(chan bool)}
+	thr := &thread{s, s.nextid, -1, false, make(chan void)}
 	s.nextid++
 	if thr.id != -1 {
 		thr.index = len(s.runnable)
@@ -61,26 +73,15 @@ func (s *Scheduler) Run(main func()) {
 
 	s.as.Run(func() {
 		// Initialize state.
-		s.nextid = -1
+		s.nextid = 0
 		s.runnable = nil
-		s.runThread = s.newThread()
-		s.curThread = s.runThread
+		s.curThread = nil
 		s.goErr = nil
-		s.Go(main)
-		if goErr := s.goErr; goErr != nil {
-			// Exit all threads. They should all be
-			// stopped in desched right now. Do this
-			// sequentially so defer blocks can clean up
-			// sequentially.
-			for _, thr := range s.runnable {
-				thr.wake <- false
-				<-thr.aborted
-			}
-			for _, thr := range s.blocked {
-				thr.wake <- false
-				<-thr.aborted
-			}
-			panic(goErr)
+		s.wakeSched = make(chan void)
+		s.goNoSched(main)
+		s.scheduler()
+		if s.goErr != nil {
+			panic(s.goErr)
 		}
 		if debug {
 			fmt.Println("run done")
@@ -88,21 +89,16 @@ func (s *Scheduler) Run(main func()) {
 	})
 }
 
-func (s *Scheduler) Go(f func()) {
+func (s *Scheduler) goNoSched(f func()) {
 	thr := s.newThread()
 	go func() {
 		defer func() {
 			goErr := recover()
-			if goErr == threadAbort {
-				if debug {
-					fmt.Printf("%v aborted\n", thr)
-				}
-				thr.aborted <- true
-				return
-			}
 
 			if debug {
-				if goErr != nil {
+				if goErr == threadAbort {
+					fmt.Printf("%v aborted\n", thr)
+				} else if goErr != nil {
 					fmt.Printf("%v panicked: %v\n", thr, goErr)
 				} else {
 					fmt.Printf("%v exiting normally\n", thr)
@@ -114,21 +110,29 @@ func (s *Scheduler) Go(f func()) {
 			s.runnable[thr.index].index = thr.index
 			s.runnable = s.runnable[:len(s.runnable)-1]
 
-			// If we're panicking, pass the error to Run
-			// so it can shut down this execution.
+			// If this is a thread abort, notify the
+			// scheduler that we're done aborting and
+			// exit.
+			if goErr == threadAbort {
+				s.wakeSched <- void{}
+				return
+			}
+
+			// If we're panicking, report the error so the
+			// scheduler can shut down this execution.
 			//
 			// TODO: Capture the stack trace.
 			if goErr != nil {
-				s.goErr = goErr
-				s.runThread.wake <- true
+				if s.goErr == nil {
+					s.goErr = goErr
+				}
+				s.wakeSched <- void{}
 				return
 			}
 
 			// Otherwise, this is a regular thread exit.
-			// Close our wake channel so Sched returns
-			// immediately and release this goroutine.
 			close(thr.wake)
-			s.Sched()
+			s.wakeSched <- void{}
 		}()
 		if debug {
 			fmt.Printf("%v started\n", thr)
@@ -136,41 +140,71 @@ func (s *Scheduler) Go(f func()) {
 		thr.desched()
 		f()
 	}()
-	s.Sched()
 }
 
-// desched deschedules thread t until the scheduler selects it or all
-// threads are aborted. In the case of a thread abort, it panics with
-// threadAbort.
-func (t *thread) desched() {
-	if cont, ok := <-t.wake; ok && !cont {
-		panic(threadAbort)
-	}
+func (s *Scheduler) Go(f func()) {
+	s.goNoSched(f)
+	s.Sched()
 }
 
 var threadAbort = errors.New("thread aborted because of panic in another thread")
 
+// scheduler runs on the top-level thread and coordinates which thread
+// to execute next.
+func (s *Scheduler) scheduler() {
+	for len(s.runnable) > 0 {
+		// Pick a thread to run. If we're aborting, we just
+		// pick runnable[0], since it's not useful to explore
+		// this, and we might be aborting because amb
+		// terminated this path anyway.
+		var tid int
+		if s.goErr == nil {
+			// Amb may panic with PathTerminated.
+			func() {
+				defer func() {
+					err := recover()
+					if err == amb.PathTerminated {
+						s.goErr = err
+					} else if err != nil {
+						panic(err)
+					}
+				}()
+				tid = s.as.Amb(len(s.runnable))
+			}()
+		}
+		s.curThread = s.runnable[tid]
+
+		if debug {
+			fmt.Printf("scheduling %v from %v\n", s.curThread, s.runnable)
+		}
+
+		// Switch to that thread.
+		s.curThread.wake <- void{}
+
+		// Wait for thread to deschedule.
+		<-s.wakeSched
+		if s.goErr != nil {
+			// This state will signal all threads to exit,
+			// but we have to wake blocked threads so they
+			// can exit, too.
+			s.runnable = append(s.runnable, s.blocked...)
+			s.blocked = nil
+		}
+	}
+}
+
 func (s *Scheduler) Sched() {
 	this := s.curThread
-
-	// Pick a thread to run next.
-	if len(s.runnable) == 0 {
-		// The last thread exited. Return to the Run thread.
-		s.runThread.wake <- true
-		return
-	}
-	s.curThread = s.runnable[s.as.Amb(len(s.runnable))]
-
-	if debug {
-		fmt.Printf("scheduling %v from %v\n", s.curThread, s.runnable)
-	}
-
-	// Switch to that thread.
-	if this == s.curThread {
-		return
-	}
-	s.curThread.wake <- true
+	s.wakeSched <- void{}
 	this.desched()
+}
+
+func (t *thread) desched() {
+	<-t.wake
+	if t.sched.goErr != nil {
+		// We're shutting down this execution.
+		panic(threadAbort)
+	}
 }
 
 func (s *Scheduler) Amb(n int) int {

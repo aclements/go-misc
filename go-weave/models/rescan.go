@@ -4,6 +4,13 @@
 
 // +build ignore
 
+// rescan is a model of two concurrent stack re-scanning approaches:
+// transitive mark write barriers, and scan restarting.
+//
+// This model is somewhat limited. The mutator is uninteresting and it
+// doesn't model concurrent write barriers (or the mark quiescence
+// necessary with concurrent write barriers). This model formed the
+// basis for the yuasa model, which is much more complete.
 package main
 
 import (
@@ -152,6 +159,10 @@ func wbarrier(slot, val ptr) {
 				// Block STW termination while marking.
 				world.RLock()
 				defer world.RUnlock()
+				// TODO: In reality, concurrent marks
+				// can collide with each other, so we
+				// need mark quiescence. This doesn't
+				// model that.
 				mark(mem[val].l, marked, "barrier")
 			}()
 		}

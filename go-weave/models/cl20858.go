@@ -4,6 +4,8 @@
 
 // +build ignore
 
+// cl20858 is a model for checking the proposed scheduler change in CL
+// 20858.
 package main
 
 import (

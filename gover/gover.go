@@ -52,6 +52,16 @@
 //
 // Clean the deduplication cache. This is useful after removing saved
 // builds to free up space.
+//
+//
+// Recipies
+//
+// To build and save all versions of Go:
+//
+//     git clone https://go.googlesource.com/go && cd go
+//     for tag in $(git tag | grep '^go[0-9.]*$'); do
+//       git checkout $tag && git clean -df && gover build ${tag##go}
+//     done
 package main
 
 import (

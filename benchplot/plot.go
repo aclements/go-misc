@@ -51,20 +51,25 @@ func plot(t, git table.Grouping, configCols, resultCols []string) (*gg.Plot, int
 	plot.GroupBy("name", "metric")
 	plot.Stat(ggstat.Normalize{X: "branch", By: firstMasterIndex, Cols: []string{"mean result", "max result", "min result"}, DenomCols: []string{"mean result", "mean result", "mean result"}})
 	y = "normalized " + y
+	for _, col := range []string{"mean result", "max result", "min result"} {
+		plot.SetData(table.Remove(plot.Data(), col))
+	}
 	plot.SetData(table.Ungroup(table.Ungroup(plot.Data())))
 
 	// Compute geomean for each metric at each commit if there's
 	// more than one benchmark.
-	// if len(table.GroupBy(t, "name").Tables()) > 1 {
-	// 	gt := removeNaNs(plot.Data(), y)
-	// 	gt = ggstat.Agg("commit", "metric")(ggstat.AggGeoMean(y)).F(gt)
-	// 	gt = table.MapTables(gt, func(_ table.GroupID, t *table.Table) *table.Table {
-	// 		return table.NewBuilder(t).AddConst("name", " geomean").Done()
-	// 	})
-	// 	gt = table.Rename(gt, "geomean "+y, y)
-	// 	plot.SetData(table.Concat(plot.Data(), gt))
-	// 	nrows++
-	// }
+	if len(table.GroupBy(t, "name").Tables()) > 1 {
+		gt := removeNaNs(plot.Data(), y)
+		gt = ggstat.Agg("commit", "metric", "branch", "commit index")(ggstat.AggGeoMean(y), ggstat.AggMin("normalized min result"), ggstat.AggMax("normalized max result")).F(gt)
+		gt = table.MapTables(gt, func(_ table.GroupID, t *table.Table) *table.Table {
+			return table.NewBuilder(t).AddConst("name", " geomean").Done()
+		})
+		gt = table.Rename(gt, "geomean "+y, y)
+		gt = table.Rename(gt, "min normalized min result", "normalized min result")
+		gt = table.Rename(gt, "max normalized max result", "normalized max result")
+		plot.SetData(table.Concat(plot.Data(), gt))
+		nrows++
+	}
 
 	// Always show Y=0.
 	plot.SetScale("y", gg.NewLinearScaler().Include(0))

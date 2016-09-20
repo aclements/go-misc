@@ -14,6 +14,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"log"
@@ -32,6 +33,7 @@ func main() {
 	log.SetFlags(0)
 
 	defaultGitDir, _ := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	defaultGitDir = bytes.TrimRight(defaultGitDir, "\n")
 	var (
 		flagCPUProfile = flag.String("cpuprofile", "", "write CPU profile to `file`")
 		flagMemProfile = flag.String("memprofile", "", "write heap profile to `file`")

@@ -122,6 +122,7 @@ type eltTicks struct {
 
 type plotEltTicks struct {
 	major  table.Slice
+	minor  table.Slice
 	labels []string
 }
 
@@ -194,8 +195,8 @@ func (e *eltTicks) computeTicks() {
 	// Optimize ticks, keeping labels at least tickDistance apart.
 	e.ticks = make(map[Scaler]plotEltTicks)
 	for s := range e.scales() {
-		pred := func(ticks []float64, labels []string) bool {
-			if len(ticks) <= 1 {
+		pred := func(ticks, _ table.Slice, labels []string) bool {
+			if len(labels) <= 1 {
 				return true
 			}
 			// Check distance between labels.
@@ -220,8 +221,8 @@ func (e *eltTicks) computeTicks() {
 
 			return true
 		}
-		major, _, labels := s.Ticks(maxTicks, pred)
-		e.ticks[s] = plotEltTicks{major, labels}
+		major, minor, labels := s.Ticks(maxTicks, pred)
+		e.ticks[s] = plotEltTicks{major, minor, labels}
 	}
 }
 

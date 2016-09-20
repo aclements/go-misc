@@ -59,6 +59,39 @@ func (m *markPath) mark(env *renderEnv, canvas *svg.SVG) {
 	drawPath(canvas, xs, ys, stroke, fill)
 }
 
+type markArea struct {
+	x, upper, lower, fill *scaledData
+}
+
+func rev(data []float64) []float64 {
+	var rev []float64
+	for i := len(data) - 1; i >= 0; i-- {
+		rev = append(rev, data[i])
+	}
+	return rev
+}
+
+func (m *markArea) mark(env *renderEnv, canvas *svg.SVG) {
+	xs := env.get(m.x).([]float64)
+	upper := make([]float64, len(xs))
+	if m.upper != nil {
+		upper = env.get(m.upper).([]float64)
+	}
+	lower := make([]float64, len(xs))
+	if m.lower != nil {
+		lower = env.get(m.lower).([]float64)
+	}
+	var fill color.Color = color.Black
+	if m.fill != nil {
+		fill = env.getFirst(m.fill).(color.Color)
+	}
+
+	xs = append(xs, rev(xs)...)
+	ys := append(upper, lower...)
+
+	drawPath(canvas, xs, ys, color.Transparent, fill)
+}
+
 type markSteps struct {
 	dir StepMode
 
@@ -150,7 +183,7 @@ func drawPath(canvas *svg.SVG, xs, ys []float64, stroke color.Color, fill color.
 	// XXX Stroke width
 
 	style := cssPaint("stroke", stroke) + ";" + cssPaint("fill", fill) + ";stroke-width:3"
-	canvas.Path(string(path), style)
+	canvas.Path(wrapPath(string(path)), style)
 }
 
 type markPoint struct {
@@ -206,7 +239,9 @@ func (m *markTiles) mark(env *renderEnv, canvas *svg.SVG) {
 	// are color.Color? How would this work with an identity
 	// scaler?
 	var fills []color.Color
-	slice.Convert(&fills, env.get(m.fill))
+	if m.fill != nil {
+		slice.Convert(&fills, env.get(m.fill))
+	}
 
 	// TODO: We can't use an <image> this if the width and height
 	// are specified, or if there is a stroke.
@@ -275,11 +310,15 @@ func (m *markTiles) mark(env *renderEnv, canvas *svg.SVG) {
 	// Create the image.
 	iw, ih := round((xmax-xmin+xgap)/xgap), round((ymax-ymin+ygap)/ygap)
 	img := image.NewRGBA(image.Rect(0, 0, iw, ih))
+	fill := color.Color(color.Black)
 	for i := range xs {
 		if !isFinite(xs[i]) || !isFinite(ys[i]) {
 			continue
 		}
-		img.Set(round((xs[i]-xmin)/xgap), round((ys[i]-ymin)/ygap), fills[i])
+		if fills != nil {
+			fill = fills[i]
+		}
+		img.Set(round((xs[i]-xmin)/xgap), round((ys[i]-ymin)/ygap), fill)
 	}
 
 	// Encode the image.
@@ -405,12 +444,12 @@ function tooltipMove(evt, data, tid, minx, maxx) {
 	var pt = svg.createSVGPoint();
 	pt.x = evt.clientX;
 	pt.y = evt.clientY;
-	var ex = pt.matrixTransform(svg.getScreenCTM().inverse()).x;
+	var epos = pt.matrixTransform(svg.getScreenCTM().inverse());
 
 	// Find data point closest to event coordinate.
-	var cd = Math.abs(ex-data.x[0]), ci = 0;
+	var cd = Math.sqrt(Math.pow(epos.x-data.x[0], 2) + Math.pow(epos.y-data.y[0], 2)), ci = 0;
 	for (var i = 1; i < data.x.length; i++) {
-		var d = Math.abs(ex-data.x[i]);
+		var d = Math.sqrt(Math.pow(epos.x-data.x[i], 2) + Math.pow(epos.y-data.y[i], 2));
 		if (d < cd) { cd = d; ci = i; }
 	}
 

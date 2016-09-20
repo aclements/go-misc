@@ -7,26 +7,29 @@ package slice
 import (
 	"reflect"
 	"sort"
+	"time"
 
 	"github.com/aclements/go-gg/generic"
 )
 
 // CanSort returns whether the value v can be sorted.
 func CanSort(v interface{}) bool {
-	if _, ok := v.(sort.Interface); ok {
+	switch v.(type) {
+	case sort.Interface, []time.Time:
 		return true
 	}
 	return generic.CanOrderR(reflect.TypeOf(v).Elem().Kind())
 }
 
-// Sort sorts v in increasing order. v must implement sort.Interface
-// or must be a slice whose elements are orderable.
+// Sort sorts v in increasing order. v must implement sort.Interface,
+// be a slice whose elements are orderable, or be a []time.Time.
 func Sort(v interface{}) {
 	sort.Sort(Sorter(v))
 }
 
 // Sorter returns a sort.Interface for sorting v. v must implement
-// sort.Interface or must be a slice whose elements are orderable.
+// sort.Interface, be a slice whose elements are orderable, or be a
+// []time.Time.
 func Sorter(v interface{}) sort.Interface {
 	switch v := v.(type) {
 	case []int:
@@ -35,6 +38,8 @@ func Sorter(v interface{}) sort.Interface {
 		return sort.Float64Slice(v)
 	case []string:
 		return sort.StringSlice(v)
+	case []time.Time:
+		return sortTimeSlice(v)
 	case sort.Interface:
 		return v
 	}
@@ -124,3 +129,9 @@ func (s sortStringSlice) Swap(i, j int) {
 	s.Index(i).SetString(b)
 	s.Index(j).SetString(a)
 }
+
+type sortTimeSlice []time.Time
+
+func (s sortTimeSlice) Len() int           { return len(s) }
+func (s sortTimeSlice) Less(i, j int) bool { return s[i].Before(s[j]) }
+func (s sortTimeSlice) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }

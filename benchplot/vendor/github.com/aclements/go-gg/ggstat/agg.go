@@ -128,6 +128,9 @@ func checkConst(t *table.Table, col string) bool {
 	if v.Len() <= 1 {
 		return true
 	}
+	if !v.Type().Comparable() {
+		return false
+	}
 	elem := v.Index(0).Interface()
 	for i, l := 1, v.Len(); i < l; i++ {
 		if elem != v.Index(i).Interface() {

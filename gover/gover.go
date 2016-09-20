@@ -525,7 +525,7 @@ func cp(src, dst string) {
 
 func cpR(src, dst string) {
 	filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if info.IsDir() {
+		if err != nil || info.IsDir() {
 			return nil
 		}
 		base := filepath.Base(path)

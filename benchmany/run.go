@@ -71,7 +71,7 @@ func init() {
 	}
 	f.StringVar(&run.buildCmd, "buildcmd", defaultBuildCmd, "build benchmark using \"`cmd` -o <bin>\"")
 	f.IntVar(&run.iterations, "n", 5, "run each benchmark `N` times")
-	f.StringVar(&run.logPath, "o", "bench.log", "write benchmark results to `file`")
+	f.StringVar(&run.logPath, "o", "", "write benchmark results to `file` (default \"bench.log\" in -d directory)")
 	f.StringVar(&run.binDir, "d", ".", "write binaries to `directory`")
 	f.BoolVar(&run.saveTree, "save-tree", false, "save Go trees using gover and run benchmarks under saved trees")
 	f.DurationVar(&run.timeout, "timeout", 30*time.Minute, "time out a run after `duration`")
@@ -98,6 +98,10 @@ func doRun() {
 		fmt.Fprintf(os.Stderr, "unknown order: %s\n", run.order)
 		flag.Usage()
 		os.Exit(2)
+	}
+
+	if run.logPath == "" {
+		run.logPath = filepath.Join(run.binDir, "bench.log")
 	}
 
 	commits := getCommits(flag.Args(), run.logPath)

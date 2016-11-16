@@ -345,6 +345,8 @@ func doSave(hash string, diff []byte) {
 	// maybe just save the types of files go list can return, plus
 	// "testdata" directories?
 	cpR(filepath.Join(goroot, "src"), filepath.Join(savePath, "src"))
+	// Copy tracer static resources.
+	cpR(filepath.Join(goroot, "misc", "trace"), filepath.Join(savePath, "misc", "trace"))
 
 	if diff != nil {
 		if err := ioutil.WriteFile(filepath.Join(savePath, "diff"), diff, 0666); err != nil {

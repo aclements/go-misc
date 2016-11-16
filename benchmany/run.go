@@ -8,12 +8,15 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"math"
 	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -99,6 +102,15 @@ func doRun() {
 
 	commits := getCommits(flag.Args(), run.logPath)
 
+	// Write header block to log.
+	if len(commits) > 0 {
+		header := new(bytes.Buffer)
+		fmt.Fprintf(header, "# Run started at %s\n", time.Now())
+		writeHeader(header)
+		fmt.Fprintf(header, "\n")
+		commits[0].writeLog(header.String())
+	}
+
 	// Always run git from the top level of the git tree. Some
 	// commands, like git clean, care about this.
 	gitDir = trimNL(git("rev-parse", "--show-toplevel"))
@@ -118,6 +130,36 @@ func doRun() {
 			break
 		}
 		runBenchmark(commit, status)
+	}
+}
+
+func writeHeader(w io.Writer) {
+	goos, err := exec.Command("go", "env", "GOOS").Output()
+	if err != nil {
+		log.Fatal("error running go env GOOS: %s", err)
+	}
+	fmt.Fprintf(w, "goos: %s\n", strings.TrimSpace(string(goos)))
+
+	goarch, err := exec.Command("go", "env", "GOARCH").Output()
+	if err != nil {
+		log.Fatal("error running go env GOARCH: %s", err)
+	}
+	fmt.Fprintf(w, "goarch: %s\n", strings.TrimSpace(string(goarch)))
+
+	kernel, err := exec.Command("uname", "-sr").Output()
+	if err != nil {
+		log.Fatal("error running uname -sr: %s", err)
+	}
+	fmt.Fprintf(w, "uname-sr: %s\n", strings.TrimSpace(string(kernel)))
+
+	cpuinfo, err := ioutil.ReadFile("/proc/cpuinfo")
+	fmt.Printf("cpuinfo=%s\nerr=%s\n", cpuinfo, err)
+	if err == nil {
+		subs := regexp.MustCompile(`(?m)^model name\s*:\s*(.*)`).FindSubmatch(cpuinfo)
+		fmt.Printf("subs: %s\n", subs)
+		if subs != nil {
+			fmt.Fprintf(w, "cpu: %s\n", string(subs[1]))
+		}
 	}
 }
 

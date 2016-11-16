@@ -119,6 +119,12 @@ func TestMain(m *testing.M) {
 		for _, b := range bs {
 			t.Log(b, b.Config["commit"].RawValue)
 			counts[b.Config["commit"].RawValue]++
+
+			if uname, ok := b.Config["uname-sr"]; !ok {
+				t.Errorf("missing uname-sr config")
+			} else {
+				t.Logf("uname-sr: %s", uname)
+			}
 		}
 		for _, rev := range revs {
 			if counts[rev] != iters {

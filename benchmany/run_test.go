@@ -58,6 +58,8 @@ func TestRun(t *testing.T) {
 	}
 	defer os.RemoveAll(repo)
 	tgit(t, repo, "init")
+	tgit(t, repo, "config", "user.name", "gopher")
+	tgit(t, repo, "config", "user.email", "gopher@example.com")
 
 	// Write benchmark.
 	err = ioutil.WriteFile(filepath.Join(repo, "x_test.go"), []byte(`

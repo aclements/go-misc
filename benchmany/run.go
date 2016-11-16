@@ -140,27 +140,25 @@ func doRun() {
 func writeHeader(w io.Writer) {
 	goos, err := exec.Command("go", "env", "GOOS").Output()
 	if err != nil {
-		log.Fatal("error running go env GOOS: %s", err)
+		log.Fatalf("error running go env GOOS: %s", err)
 	}
 	fmt.Fprintf(w, "goos: %s\n", strings.TrimSpace(string(goos)))
 
 	goarch, err := exec.Command("go", "env", "GOARCH").Output()
 	if err != nil {
-		log.Fatal("error running go env GOARCH: %s", err)
+		log.Fatalf("error running go env GOARCH: %s", err)
 	}
 	fmt.Fprintf(w, "goarch: %s\n", strings.TrimSpace(string(goarch)))
 
 	kernel, err := exec.Command("uname", "-sr").Output()
 	if err != nil {
-		log.Fatal("error running uname -sr: %s", err)
+		log.Fatalf("error running uname -sr: %s", err)
 	}
 	fmt.Fprintf(w, "uname-sr: %s\n", strings.TrimSpace(string(kernel)))
 
 	cpuinfo, err := ioutil.ReadFile("/proc/cpuinfo")
-	fmt.Printf("cpuinfo=%s\nerr=%s\n", cpuinfo, err)
 	if err == nil {
 		subs := regexp.MustCompile(`(?m)^model name\s*:\s*(.*)`).FindSubmatch(cpuinfo)
-		fmt.Printf("subs: %s\n", subs)
 		if subs != nil {
 			fmt.Fprintf(w, "cpu: %s\n", string(subs[1]))
 		}

@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -79,7 +80,7 @@ func main() {
 
 	c := gerrit.NewClient("https://go-review.googlesource.com", gerrit.GitCookiesAuth())
 
-	cls, err := c.QueryChanges(query, gerrit.QueryChangesOpt{
+	cls, err := c.QueryChanges(context.Background(), query, gerrit.QueryChangesOpt{
 		Fields: []string{"CURRENT_REVISION", "CURRENT_COMMIT"},
 	})
 	if err != nil {

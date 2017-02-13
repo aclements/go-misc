@@ -2,6 +2,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Command greplogs searches Go builder logs.
+//
+//     greplogs [flags] (-e regexp|-E regexp) paths...
+//     greplogs [flags] (-e regexp|-E regexp) -dashboard
+//
+// greplogs finds builder logs matching a given set of regular
+// expressions in Go syntax (godoc.org/regexp/syntax) and extracts
+// failures from them.
+//
+// greplogs can search an arbitrary set of files just like grep.
+// Alternatively, the -dashboard flag causes it to search the logs
+// saved locally by fetchlogs (golang.org/x/build/cmd/fetchlogs).
 package main
 
 import (

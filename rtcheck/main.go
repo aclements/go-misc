@@ -365,7 +365,9 @@ func getDefaultRoots() []string {
 		case "cmpstring", "eqstring",
 			"int64div", "uint64div", "int64mod", "uint64mod",
 			"float64toint64", "float64touint64",
-			"int64tofloat64", "uint64tofloat64":
+			"int64tofloat64", "uint64tofloat64",
+			// Go 1.8:
+			"float64touint32", "uint32tofloat64":
 			// These are declared only in assembly.
 			continue
 		}
@@ -852,7 +854,7 @@ var fns struct {
 	growslice, slicecopy, slicestringcopy *ssa.Function
 
 	// Map functions.
-	mapaccess1, mapaccess2, mapassign1, mapdelete *ssa.Function
+	mapaccess1, mapaccess2, mapassign1, mapassign, mapdelete *ssa.Function
 
 	// Channel functions.
 	chansend1, closechan *ssa.Function
@@ -868,7 +870,9 @@ var runtimeFns = map[string]interface{}{
 	"growslice": &fns.growslice, "slicecopy": &fns.slicecopy,
 	"slicestringcopy": &fns.slicestringcopy,
 	"mapaccess1":      &fns.mapaccess1, "mapaccess2": &fns.mapaccess2,
-	"mapassign1": &fns.mapassign1, "mapdelete": &fns.mapdelete,
+	//"mapassign1": &fns.mapassign1, // Pre-1.8
+	"mapassign": &fns.mapassign, // Go 1.8
+	"mapdelete": &fns.mapdelete,
 	"chansend1": &fns.chansend1, "closechan": &fns.closechan,
 	"gopanic": &fns.gopanic,
 }
@@ -877,7 +881,7 @@ func lookupMembers(pkg *ssa.Package, out map[string]interface{}) {
 	for name, ptr := range out {
 		member, ok := pkg.Members[name]
 		if !ok {
-			log.Fatal("%s.%s not found", pkg, name)
+			log.Fatalf("%s.%s not found", pkg, name)
 		}
 		reflect.ValueOf(ptr).Elem().Set(reflect.ValueOf(member))
 	}
@@ -1782,7 +1786,11 @@ func (s *state) walkBlock(blockCache *PathStateSet, enterPathState PathState, ex
 			doCall(instr, []*ssa.Function{fns.newarray})
 
 		case *ssa.MapUpdate:
-			doCall(instr, []*ssa.Function{fns.mapassign1})
+			fn := fns.mapassign // Go 1.8
+			if fn == nil {
+				fn = fns.mapassign1
+			}
+			doCall(instr, []*ssa.Function{fn})
 
 		case *ssa.Panic:
 			doCall(instr, []*ssa.Function{fns.gopanic})

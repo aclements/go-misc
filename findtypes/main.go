@@ -218,7 +218,7 @@ type greyobjectFailure struct {
 
 var (
 	spanRe = regexp.MustCompile(`base=.* s\.elemsize=(\d+)`)
-	baseRe = regexp.MustCompile(`\*\(base\+(\d+)\) = (0x[0-9a-f]+)$`)
+	baseRe = regexp.MustCompile(`\*\(base\+(\d+)\) = (0x[0-9a-f]+)( <==)?$`)
 )
 
 func parseGreyobject(r io.Reader) *greyobjectFailure {
@@ -245,6 +245,9 @@ func parseGreyobject(r io.Reader) *greyobjectFailure {
 		offset, _ := strconv.ParseInt(subs[1], 0, 64)
 		val, _ := strconv.ParseInt(subs[2], 0, 64)
 
+		// TODO: This only recognizes heap pointers. Maybe
+		// look at the binary to figure out reasonable global
+		// pointers?
 		known := 2
 		if val>>32 == 0xc4 {
 			known = 1

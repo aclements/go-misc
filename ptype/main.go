@@ -102,9 +102,10 @@ func main() {
 			pkg = name[:i+1]
 		}
 
-		fmt.Printf("type %s ", name)
-		(&typePrinter{pkg: pkg}).printType(typ)
-		fmt.Printf("\n\n")
+		p := &typePrinter{pkg: pkg}
+		p.fmt("type %s ", name)
+		p.printType(typ)
+		p.fmt("\n\n")
 
 		r.SkipChildren()
 	}
@@ -129,6 +130,10 @@ type typePrinter struct {
 	pkg    string
 }
 
+func (p *typePrinter) fmt(f string, args ...interface{}) {
+	fmt.Printf(f, args...)
+}
+
 func (p *typePrinter) stripPkg(name string) string {
 	if p.pkg != "" && strings.HasPrefix(name, p.pkg) {
 		return name[len(p.pkg):]
@@ -142,7 +147,7 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 	}
 
 	if p.nameOk > 0 && typ.Common().Name != "" {
-		fmt.Print(p.stripPkg(typ.Common().Name))
+		p.fmt("%s", p.stripPkg(typ.Common().Name))
 		p.offset[len(p.offset)-1] += typ.Size()
 		return
 	}
@@ -150,12 +155,12 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 	switch typ := typ.(type) {
 	case *dwarf.ArrayType:
 		if typ.Count < 0 {
-			fmt.Print("[incomplete]")
+			p.fmt("[incomplete]")
 		} else {
-			fmt.Printf("[%d]", typ.Count)
+			p.fmt("[%d]", typ.Count)
 		}
 		if typ.StrideBitSize > 0 {
-			fmt.Printf("/* %d bit element */", typ.StrideBitSize)
+			p.fmt("/* %d bit element */", typ.StrideBitSize)
 		}
 		origOffset := p.offset
 		p.offset = append(p.offset, typ.Type.Size(), 0)
@@ -164,12 +169,12 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 
 	case *dwarf.StructType:
 		if typ.StructName != "" && (p.nameOk > 0 || isBuiltinName(typ.StructName)) {
-			fmt.Print(p.stripPkg(typ.StructName))
+			p.fmt("%s", p.stripPkg(typ.StructName))
 			break
 		}
 
 		if strings.HasPrefix(typ.StructName, "[]") {
-			fmt.Print("[]")
+			p.fmt("[]")
 			elem := typ.Field[0].Type
 			origOffset := p.offset
 			p.offset = append(p.offset, elem.Size(), 0)
@@ -179,36 +184,36 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 		}
 
 		if typ.StructName == "runtime.eface" {
-			fmt.Print("interface{}")
+			p.fmt("interface{}")
 			break
 		} else if typ.StructName == "runtime.iface" {
-			fmt.Print("interface{ ... }")
+			p.fmt("interface{ ... }")
 			break
 		}
 
 		isUnion := typ.Kind == "union"
-		fmt.Printf("%s {", typ.Kind)
+		p.fmt("%s {", typ.Kind)
 		if typ.Incomplete {
-			fmt.Print(" incomplete ")
+			p.fmt(" incomplete ")
 		}
 		p.depth++
 		startOffset := p.offset[len(p.offset)-1]
 		var prevEnd int64
 		for i, f := range typ.Field {
 			if i != 0 {
-				fmt.Println()
+				p.fmt("\n")
 			}
 			indent := "\n" + strings.Repeat("\t", p.depth)
-			fmt.Print(indent)
+			p.fmt(indent)
 			// TODO: Bit offsets?
 			if !isUnion {
 				offset := startOffset + f.ByteOffset
 				if i > 0 && prevEnd < offset {
-					fmt.Printf("// %d byte gap\n", offset-prevEnd)
-					fmt.Print(indent)
+					p.fmt("// %d byte gap\n", offset-prevEnd)
+					p.fmt(indent)
 				}
 				p.offset[len(p.offset)-1] = offset
-				fmt.Printf("// offset %s%s", p.strOffset(), indent)
+				p.fmt("// offset %s%s", p.strOffset(), indent)
 				if f.Type.Size() < 0 {
 					// Who knows. Give up.
 					// TODO: This happens for funcs.
@@ -217,32 +222,32 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 					prevEnd = offset + f.Type.Size()
 				}
 			}
-			fmt.Printf("%s ", f.Name)
+			p.fmt("%s ", f.Name)
 			p.printType(f.Type)
 			if f.BitSize != 0 {
-				fmt.Printf(" : %d", f.BitSize)
+				p.fmt(" : %d", f.BitSize)
 			}
 		}
 		p.offset[len(p.offset)-1] = startOffset
 		p.depth--
 		if len(typ.Field) == 0 {
-			fmt.Print("}")
+			p.fmt("}")
 		} else {
-			fmt.Printf("\n%s}", strings.Repeat("\t", p.depth))
+			p.fmt("\n%s}", strings.Repeat("\t", p.depth))
 		}
 
 	case *dwarf.EnumType:
-		fmt.Print("enum") // TODO
+		p.fmt("enum") // TODO
 
 	case *dwarf.BoolType, *dwarf.CharType, *dwarf.ComplexType, *dwarf.FloatType, *dwarf.IntType, *dwarf.UcharType, *dwarf.UintType:
 		// Basic types.
-		fmt.Print(typ.String())
+		p.fmt("%s", typ.String())
 
 	case *dwarf.PtrType:
 		origOffset := p.offset
 		p.offset = []int64{0}
 		p.nameOk++
-		fmt.Printf("*")
+		p.fmt("*")
 		p.printType(typ.Type)
 		p.nameOk--
 		p.offset = origOffset
@@ -250,10 +255,10 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 	case *dwarf.FuncType:
 		// TODO: Expand ourselves so we can clean up argument
 		// types, etc.
-		fmt.Printf(typ.String())
+		p.fmt(typ.String())
 
 	case *dwarf.QualType:
-		fmt.Printf("/* %s */ ", typ.Qual)
+		p.fmt("/* %s */ ", typ.Qual)
 		p.printType(typ.Type)
 
 	case *dwarf.TypedefType:
@@ -263,7 +268,7 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 			//
 			// TODO: Expand map types ourselves if
 			// possible so we can clean up the type names.
-			fmt.Print(n)
+			p.fmt("%s", n)
 			return
 		}
 
@@ -279,7 +284,7 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 			switch str.StructName {
 			case "runtime.iface", "runtime.eface":
 				// Named interface type.
-				fmt.Printf(p.stripPkg(n))
+				p.fmt(p.stripPkg(n))
 				return
 			}
 		}
@@ -289,14 +294,14 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 		// underlying type is a pointer to a struct named
 		// "hash<...>".
 
-		fmt.Printf("/* %s */ ", p.stripPkg(n))
+		p.fmt("/* %s */ ", p.stripPkg(n))
 		p.printType(real)
 
 	case *dwarf.UnspecifiedType:
-		fmt.Print("unspecified")
+		p.fmt("unspecified")
 
 	case *dwarf.VoidType:
-		fmt.Print("void")
+		p.fmt("void")
 	}
 
 	p.offset[len(p.offset)-1] += typ.Size()

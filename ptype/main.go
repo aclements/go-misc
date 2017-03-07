@@ -14,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 func main() {
@@ -128,10 +129,59 @@ type typePrinter struct {
 	depth  int
 	nameOk int
 	pkg    string
+
+	// pos is the current character position on this line.
+	pos int
+
+	// lineComment is a comment to print at the end of this line.
+	lineComment string
 }
 
 func (p *typePrinter) fmt(f string, args ...interface{}) {
-	fmt.Printf(f, args...)
+	b := fmt.Sprintf(f, args...)
+	if strings.IndexAny(b, "\n\t") < 0 {
+		fmt.Printf("%s", b)
+		p.pos += utf8.RuneCountInString(b)
+		return
+	}
+	lines := strings.Split(b, "\n")
+	for i, line := range lines {
+		hasNL := i < len(lines)-1
+		if p.lineComment == "" && hasNL {
+			// Fast path for complete lines with no comment.
+			fmt.Printf("%s\n", line)
+			p.pos = 0
+			continue
+		}
+
+		for _, r := range line {
+			if r == '\t' {
+				p.pos = (p.pos + 8) &^ 7
+			} else {
+				p.pos++
+			}
+		}
+		fmt.Printf("%s", line)
+		if hasNL {
+			if p.lineComment != "" {
+				space := 50 - p.pos
+				if space < 1 {
+					space = 1
+				}
+				fmt.Printf("%*s// %s", space, "", p.lineComment)
+				p.lineComment = ""
+			}
+			fmt.Printf("\n")
+			p.pos = 0
+		}
+	}
+}
+
+func (p *typePrinter) setLineComment(f string, args ...interface{}) {
+	if p.lineComment != "" {
+		panic("multiple line comments")
+	}
+	p.lineComment = fmt.Sprintf(f, args...)
 }
 
 func (p *typePrinter) stripPkg(name string) string {
@@ -200,20 +250,17 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 		startOffset := p.offset[len(p.offset)-1]
 		var prevEnd int64
 		for i, f := range typ.Field {
-			if i != 0 {
-				p.fmt("\n")
-			}
 			indent := "\n" + strings.Repeat("\t", p.depth)
 			p.fmt(indent)
 			// TODO: Bit offsets?
 			if !isUnion {
 				offset := startOffset + f.ByteOffset
 				if i > 0 && prevEnd < offset {
-					p.fmt("// %d byte gap\n", offset-prevEnd)
+					p.fmt("// %d byte gap", offset-prevEnd)
 					p.fmt(indent)
 				}
 				p.offset[len(p.offset)-1] = offset
-				p.fmt("// offset %s%s", p.strOffset(), indent)
+				p.setLineComment("offset %s", p.strOffset())
 				if f.Type.Size() < 0 {
 					// Who knows. Give up.
 					// TODO: This happens for funcs.

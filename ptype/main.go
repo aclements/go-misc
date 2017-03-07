@@ -3,6 +3,39 @@
 // license that can be found in the LICENSE file.
 
 // Command ptype prints Go types from a binary using DWARF info.
+//
+// ptype binary <types...> prints types matching the given regexps in
+// binary in (approximate) Go syntax. If no types are named, ptype
+// prints all named types.
+//
+// The printed types are annotated with information about sizes, field
+// offsets, and gaps between fields.
+//
+// The printed types are as close as possible to Go type syntax, but
+// aren't guaranteed to be legal Go code (e.g., unions have no Go
+// equivalent). ptype backs out high-level Go types such as maps and
+// channels where possible.
+//
+// For example, ptype ptype runtime.mcache prints:
+//
+//     type runtime.mcache struct {
+//             // 1200 byte struct
+//             next_sample int32                         // offset 0
+//             // 4 byte gap
+//             local_scan uintptr                        // offset 8
+//             tiny uintptr                              // offset 16
+//             tinyoffset uintptr                        // offset 24
+//             local_tinyallocs uintptr                  // offset 32
+//             alloc [67]*mspan                          // offset 40
+//             stackcache [4]struct {                    // offset 576
+//                     list runtime.gclinkptr            // offset 576 + 16*i
+//                     size uintptr                      // offset 576 + 16*i + 8
+//             }
+//             local_nlookup uintptr                     // offset 640
+//             local_largefree uintptr                   // offset 648
+//             local_nlargefree uintptr                  // offset 656
+//             local_nsmallfree [67]uintptr              // offset 664
+//     }
 package main
 
 import (

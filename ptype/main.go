@@ -289,6 +289,11 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 		p.fmt("%s", typ.String())
 
 	case *dwarf.PtrType:
+		if _, ok := typ.Type.(*dwarf.VoidType); ok {
+			// *void is unsafe.Pointer
+			p.fmt("unsafe.Pointer")
+			break
+		}
 		origOffset := p.offset
 		p.offset = []int64{0}
 		p.nameOk++

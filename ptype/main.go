@@ -244,13 +244,15 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 		isUnion := typ.Kind == "union"
 		p.fmt("%s {", typ.Kind)
 		if typ.Incomplete {
-			p.fmt(" incomplete ")
+			p.fmt(" incomplete }")
+			break
 		}
 		p.depth++
+		indent := "\n" + strings.Repeat("\t", p.depth)
+		p.fmt("%s// %d byte %s", indent, typ.Size(), typ.Kind)
 		startOffset := p.offset[len(p.offset)-1]
 		var prevEnd int64
 		for i, f := range typ.Field {
-			indent := "\n" + strings.Repeat("\t", p.depth)
 			p.fmt(indent)
 			// TODO: Bit offsets?
 			if !isUnion {
@@ -277,11 +279,7 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 		}
 		p.offset[len(p.offset)-1] = startOffset
 		p.depth--
-		if len(typ.Field) == 0 {
-			p.fmt("}")
-		} else {
-			p.fmt("\n%s}", strings.Repeat("\t", p.depth))
-		}
+		p.fmt("\n%s}", strings.Repeat("\t", p.depth))
 
 	case *dwarf.EnumType:
 		p.fmt("enum") // TODO

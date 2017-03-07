@@ -193,6 +193,7 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 		}
 		p.depth++
 		startOffset := p.offset[len(p.offset)-1]
+		var prevEnd int64
 		for i, f := range typ.Field {
 			if i != 0 {
 				fmt.Println()
@@ -200,10 +201,21 @@ func (p *typePrinter) printType(typ dwarf.Type) {
 			indent := "\n" + strings.Repeat("\t", p.depth)
 			fmt.Print(indent)
 			// TODO: Bit offsets?
-			// TODO: Print gaps.
 			if !isUnion {
-				p.offset[len(p.offset)-1] = startOffset + f.ByteOffset
+				offset := startOffset + f.ByteOffset
+				if i > 0 && prevEnd < offset {
+					fmt.Printf("// %d byte gap\n", offset-prevEnd)
+					fmt.Print(indent)
+				}
+				p.offset[len(p.offset)-1] = offset
 				fmt.Printf("// offset %s%s", p.strOffset(), indent)
+				if f.Type.Size() < 0 {
+					// Who knows. Give up.
+					// TODO: This happens for funcs.
+					prevEnd = (1 << 31) - 1
+				} else {
+					prevEnd = offset + f.Type.Size()
+				}
 			}
 			fmt.Printf("%s ", f.Name)
 			p.printType(f.Type)

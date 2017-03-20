@@ -163,6 +163,8 @@ func writeHeader(w io.Writer) {
 			fmt.Fprintf(w, "cpu: %s\n", string(subs[1]))
 		}
 	}
+
+	fmt.Fprintf(w, "tool: benchmany\n")
 }
 
 func runStats(commits []*commitInfo) (doneIters, totalIters, partialCommits, doneCommits, failedCommits int) {

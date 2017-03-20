@@ -35,7 +35,7 @@ type commitInfo struct {
 // git-rev-list(1)).
 func getCommits(revRange []string, logPath string) []*commitInfo {
 	// Get commit sequence.
-	hashes := lines(git("rev-list", append([]string{"--no-walk"}, revRange...)...))
+	hashes := lines(git("rev-list", append([]string{"--no-walk", "--"}, revRange...)...))
 	commits := make([]*commitInfo, len(hashes))
 	commitMap := make(map[string]*commitInfo)
 	for i, hash := range hashes {

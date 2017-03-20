@@ -167,7 +167,11 @@ func cleanLog(l string) string {
 
 // logRun updates c with a successful run.
 func (c *commitInfo) logRun(out string) {
-	c.writeLog(fmt.Sprintf("commit: %s\n\n%s\n", c.hash, cleanLog(out)))
+	var log bytes.Buffer
+	fmt.Fprintf(&log, "commit: %s\n", c.hash)
+	fmt.Fprintf(&log, "commit-time: %s\n", c.commitDate.UTC().Format(time.RFC3339))
+	fmt.Fprintf(&log, "\n%s\n", cleanLog(out))
+	c.writeLog(log.String())
 	c.count++
 }
 

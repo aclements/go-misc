@@ -35,7 +35,8 @@ type commitInfo struct {
 // git-rev-list(1)).
 func getCommits(revRange []string, logPath string) []*commitInfo {
 	// Get commit sequence.
-	hashes := lines(git("rev-list", append([]string{"--no-walk", "--"}, revRange...)...))
+	args := append(append([]string{"--no-walk"}, revRange...), "--")
+	hashes := lines(git("rev-list", args...))
 	commits := make([]*commitInfo, len(hashes))
 	commitMap := make(map[string]*commitInfo)
 	for i, hash := range hashes {
@@ -49,7 +50,7 @@ func getCommits(revRange []string, logPath string) []*commitInfo {
 	// Get commit dates.
 	//
 	// TODO: This can produce a huge command line.
-	args := append([]string{"-s", "--format=format:%cI"}, hashes...)
+	args = append([]string{"-s", "--format=format:%cI"}, hashes...)
 	dates := lines(git("show", args...))
 	for i := range commits {
 		d, err := time.Parse(time.RFC3339, dates[i])

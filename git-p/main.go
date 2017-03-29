@@ -47,13 +47,18 @@ func main() {
 
 	// Pass a token through each showBranch so we can pipeline
 	// fetching branch information, while displaying it in order.
-	token := make(chan bool, 1)
-	token <- true
+	token := make(chan struct{}, 1)
+	token <- struct{}{}
+	// But if the output of showBranch is blocked (e.g., by
+	// back-pressure from a pager), don't start new showBranches.
+	// This avoids making lots of ultimately ignored requests to
+	// Gerrit.
+	limit := make(chan struct{}, 3)
 
 	// Resolve HEAD and show it first regardless of age.
 	head, _ := tryGit("symbolic-ref", "HEAD")
 	if head != "" {
-		token = showBranch(gerrit, head, "HEAD", remote, upstreams, token)
+		token = showBranch(gerrit, head, "HEAD", remote, upstreams, token, limit)
 	}
 
 	// Get all local branches, sorted by most recent commit date.
@@ -62,13 +67,16 @@ func main() {
 		if branch == head {
 			continue
 		}
-		token = showBranch(gerrit, branch, "", remote, upstreams, token)
+		token = showBranch(gerrit, branch, "", remote, upstreams, token, limit)
 	}
 
 	<-token
 }
 
-func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams []string, token chan bool) chan bool {
+func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams []string, token, limit chan struct{}) chan struct{} {
+	// Don't start too many showBranches.
+	limit <- struct{}{}
+
 	// Get the Gerrit upstream name so we can construct full
 	// Change-IDs.
 	upstream := upstreamOf(branch)
@@ -98,10 +106,11 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 	}
 
 	if len(changes) == 0 {
+		<-limit
 		return token
 	}
 
-	done := make(chan bool)
+	done := make(chan struct{})
 	go func() {
 		<-token
 		// Print changes.
@@ -114,7 +123,8 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 			printChange(commits[i], change)
 		}
 		fmt.Println()
-		done <- true
+		<-limit
+		done <- struct{}{}
 	}()
 	return done
 }

@@ -173,6 +173,18 @@ func changeStatus(commit string, info *GerritChange) (string, []string) {
 	if info.CurrentRevision != commit {
 		warnings = append(warnings, "Local commit differs from mailed commit")
 	}
+	// Are there rejections?
+	rejected := false
+	for labelName, label := range info.Labels {
+		if !label.Optional && label.Rejected != nil {
+			if labelName == "Do-Not-Submit" {
+				warnings = append(warnings, "Marked \"Do not submit\"")
+			} else {
+				warnings = append(warnings, fmt.Sprintf("Rejected by %s", label.Rejected.Name))
+				rejected = true
+			}
+		}
+	}
 	// Are there comments on the latest PS? (Requires
 	// MESSAGES option.)
 	nComments := 0
@@ -214,7 +226,9 @@ func changeStatus(commit string, info *GerritChange) (string, []string) {
 
 	// Submittable? (Requires SUBMITTABLE option.)
 	status := "Pending"
-	if info.Submittable {
+	if rejected {
+		status = "Rejected"
+	} else if info.Submittable {
 		status = "Ready"
 	}
 
@@ -224,12 +238,13 @@ func changeStatus(commit string, info *GerritChange) (string, []string) {
 var printChangeOptions = []string{"SUBMITTABLE", "LABELS", "CURRENT_REVISION", "MESSAGES", "DETAILED_ACCOUNTS"}
 
 var display = map[string]string{
-	"Not mailed": "\x1b[4m", // Underline
+	"Not mailed": "\x1b[35m", // Magenta
 
-	"Pending warn": "\x1b[1;33m", // Bright yellow
-	"Ready warn":   "\x1b[1;33m", // Bright yellow
+	"Pending warn":  "\x1b[33m",   // Yellow
+	"Ready warn":    "\x1b[33m",   // Yellow
+	"Rejected warn": "\x1b[1;31m", // Bright red
 
-	"Ready": "\x1b[1;32m", // Bright green
+	"Ready": "\x1b[32m", // Green
 
 	"Submitted": "\x1b[37m",   // Gray
 	"Abandoned": "\x1b[9;37m", // Gray, strike-through

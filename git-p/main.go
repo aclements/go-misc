@@ -111,6 +111,7 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 	for _, u := range upstreams {
 		args = append(args, "^"+u)
 	}
+	args = append(args, "--")
 	commits := lines(git(args...))
 
 	// Get Change-Ids from these commits.

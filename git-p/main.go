@@ -17,8 +17,7 @@ import (
 	"unicode/utf8"
 )
 
-// TODO: Print all branches starting with HEAD, then from newest to
-// oldest. (Omit HEAD if detached.)
+// TODO: Provide a way to exclude branches (like archive/, etc)
 
 // TODO: Do the right thing if the terminal is dumb.
 
@@ -28,8 +27,6 @@ const (
 	project   = "go"
 	gerritUrl = "https://go-review.googlesource.com"
 )
-
-var branch = "HEAD"
 
 func main() {
 	setupPager()
@@ -46,6 +43,32 @@ func main() {
 		log.Fatalf("no refs for remote %s", remote)
 	}
 
+	gerrit := NewGerrit(gerritUrl)
+
+	// Pass a token through each showBranch so we can pipeline
+	// fetching branch information, while displaying it in order.
+	token := make(chan bool, 1)
+	token <- true
+
+	// Resolve HEAD and show it first regardless of age.
+	head, _ := tryGit("symbolic-ref", "HEAD")
+	if head != "" {
+		token = showBranch(gerrit, head, "HEAD", remote, upstreams, token)
+	}
+
+	// Get all local branches, sorted by most recent commit date.
+	branches := lines(git("for-each-ref", "--format", "%(refname)", "--sort", "-committerdate", "refs/heads/"))
+	for _, branch := range branches {
+		if branch == head {
+			continue
+		}
+		token = showBranch(gerrit, branch, "", remote, upstreams, token)
+	}
+
+	<-token
+}
+
+func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams []string, token chan bool) chan bool {
 	// Get the Gerrit upstream name so we can construct full
 	// Change-IDs.
 	upstream := upstreamOf(branch)
@@ -66,7 +89,6 @@ func main() {
 	// Fetch information on all of these changes.
 	//
 	// We need DETAILED_LABELS to get numeric values of labels.
-	gerrit := NewGerrit(gerritUrl)
 	changes := make([]*GerritChanges, len(cids))
 	for i, cid := range cids {
 		// TODO: Would this be simpler with a single big OR query?
@@ -75,10 +97,26 @@ func main() {
 		}
 	}
 
-	// Print changes.
-	for i, change := range changes {
-		printChange(commits[i], change)
+	if len(changes) == 0 {
+		return token
 	}
+
+	done := make(chan bool)
+	go func() {
+		<-token
+		// Print changes.
+		fmt.Printf("\x1b[1;32m%s\x1b[0m", strings.TrimPrefix(branch, "refs/heads/"))
+		if extra != "" {
+			fmt.Printf(" (\x1b[1;36m%s\x1b[0m)", extra)
+		}
+		fmt.Printf("\n")
+		for i, change := range changes {
+			printChange(commits[i], change)
+		}
+		fmt.Println()
+		done <- true
+	}()
+	return done
 }
 
 func changeStatus(commit string, info *GerritChange) (string, []string) {
@@ -203,11 +241,11 @@ func printChange(commit string, change *GerritChanges) {
 	}
 
 	hdr := fmt.Sprintf("%-10s %s", status, logMsg)
-	hdrMax := 80 - len(link)
+	hdrMax := 80 - len(link) - 2
 	if utf8.RuneCountInString(hdr) > hdrMax {
 		hdr = fmt.Sprintf("%*.*s…", hdrMax-1, hdrMax-1, hdr)
 	}
-	fmt.Printf("%s%-*s%s%s\n", control, hdrMax, hdr, eControl, link)
+	fmt.Printf("  %s%-*s%s%s\n", control, hdrMax, hdr, eControl, link)
 	for _, w := range warnings {
 		fmt.Printf("    %s\n", w)
 	}

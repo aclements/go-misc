@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Command git-p prints the status of pending commits on the current
-// branch.
+// Command git-p prints the status of pending commits on all branches.
 //
 // git-p summarizes the status of each commit, including its review
 // state in Gerrit and whether or not there are any comments or TryBot
@@ -11,8 +10,10 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"unicode/utf8"
 )
@@ -29,6 +30,22 @@ const (
 )
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [branches...]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "With no arguments, list branches from newest to oldest.\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+	branches := flag.Args()
+
+	// Check the branch names.
+	for _, b := range branches {
+		if out, err := tryGit("rev-parse", b, "--"); err != nil {
+			fmt.Printf("%s\n", out)
+			os.Exit(1)
+		}
+	}
+
 	setupPager()
 
 	// Find the Gerrit remote name.
@@ -55,14 +72,19 @@ func main() {
 	// Gerrit.
 	limit := make(chan struct{}, 3)
 
-	// Resolve HEAD and show it first regardless of age.
-	head, _ := tryGit("symbolic-ref", "HEAD")
-	if head != "" {
-		token = showBranch(gerrit, head, "HEAD", remote, upstreams, token, limit)
+	var head string
+	if len(branches) == 0 {
+		// Resolve HEAD and show it first regardless of age.
+		head, _ = tryGit("symbolic-ref", "HEAD")
+		if head != "" {
+			token = showBranch(gerrit, head, "HEAD", remote, upstreams, token, limit)
+		}
+
+		// Get all local branches, sorted by most recent commit date.
+		branches = lines(git("for-each-ref", "--format", "%(refname)", "--sort", "-committerdate", "refs/heads/"))
 	}
 
-	// Get all local branches, sorted by most recent commit date.
-	branches := lines(git("for-each-ref", "--format", "%(refname)", "--sort", "-committerdate", "refs/heads/"))
+	// Show all branches.
 	for _, branch := range branches {
 		if branch == head {
 			continue

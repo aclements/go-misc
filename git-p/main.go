@@ -22,8 +22,6 @@ import (
 
 // TODO: Do the right thing if the terminal is dumb.
 
-// TODO: Pipe output into git pager.
-
 const (
 	// TODO: Support other repos.
 	remoteUrl = "https://go.googlesource.com/go"
@@ -34,6 +32,8 @@ const (
 var branch = "HEAD"
 
 func main() {
+	setupPager()
+
 	// Find the Gerrit remote name.
 	remote, err := getRemote(remoteUrl)
 	if err != nil {

@@ -157,18 +157,6 @@ var labelMsg = regexp.MustCompile(`^Patch Set [0-9]+: [-a-zA-Z]+\+[0-9]$`)
 var trybotFailures = regexp.MustCompile(`(?m)^Failed on ([^:]+):`)
 
 func changeStatus(commit string, info *GerritChange) (status string, warnings []string) {
-	switch info.Status {
-	default:
-		return fmt.Sprintf("Unknown status %q", info.Status), nil
-	case "MERGED":
-		return "Submitted", nil
-	case "ABANDONED":
-		return "Abandoned", nil
-	case "DRAFT":
-		return "Draft", nil
-	case "NEW":
-	}
-
 	// Check for warnings on current PS. (Requires
 	// CURRENT_REVISION or ALL_REVISIONS option.)
 	curPatchSet := info.Revisions[info.CurrentRevision].Number
@@ -219,6 +207,10 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 		if labelMsg.MatchString(msg.Message) {
 			continue
 		}
+		// Some messages have no author?
+		if msg.Author == nil {
+			continue
+		}
 		// Ignore TryBot comments (Requires
 		// DETAILED_ACCOUNTS option.)
 		if msg.Author.Email == "gobot@golang.org" {
@@ -257,15 +249,29 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 			warnings = append(warnings, "TryBots failed on "+strings.Join(configs, ", "))
 		}
 	} else if tbr == nil || tbr.Approved == nil {
-		warnings = append(warnings, "TryBots not run")
+		// TryBots haven't run. If it's submitted, we don't care.
+		if info.Status != "MERGED" {
+			warnings = append(warnings, "TryBots not run")
+		}
 	}
 
-	// Submittable? (Requires SUBMITTABLE option.)
-	status = "Pending"
-	if rejected {
-		status = "Rejected"
-	} else if info.Submittable {
-		status = "Ready"
+	switch info.Status {
+	default:
+		status = fmt.Sprintf("Unknown status %q", info.Status)
+	case "MERGED":
+		status = "Submitted"
+	case "ABANDONED":
+		status = "Abandoned"
+	case "DRAFT":
+		status = "Draft"
+	case "NEW":
+		// Submittable? (Requires SUBMITTABLE option.)
+		status = "Pending"
+		if rejected {
+			status = "Rejected"
+		} else if info.Submittable {
+			status = "Ready"
+		}
 	}
 
 	return status, warnings

@@ -155,7 +155,7 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 
 var labelMsg = regexp.MustCompile(`^Patch Set [0-9]+: [-a-zA-Z]+\+[0-9]$`)
 
-func changeStatus(commit string, info *GerritChange) (string, []string) {
+func changeStatus(commit string, info *GerritChange) (status string, warnings []string) {
 	switch info.Status {
 	default:
 		return fmt.Sprintf("Unknown status %q", info.Status), nil
@@ -170,11 +170,24 @@ func changeStatus(commit string, info *GerritChange) (string, []string) {
 
 	// Check for warnings on current PS. (Requires
 	// CURRENT_REVISION or ALL_REVISIONS option.)
-	warnings := []string{}
 	curPatchSet := info.Revisions[info.CurrentRevision].Number
 	// Are there unmailed changes?
 	if info.CurrentRevision != commit {
-		warnings = append(warnings, "Local commit differs from mailed commit")
+		// How serious are the differences with the mailed changes?
+		pid1, err1 := gitPatchID(info.CurrentRevision)
+		pid2, err2 := gitPatchID(commit)
+		if !(err1 == nil && err2 == nil && pid1 == pid2) {
+			// The patches are different.
+			warnings = append(warnings, "Local commit differs from mailed commit")
+		} else {
+			msg1, err1 := gitCommitMessage(info.CurrentRevision)
+			msg2, err2 := gitCommitMessage(commit)
+			if !(err1 == nil && err2 == nil && msg1 == msg2) {
+				// Patches are the same, but the
+				// commit message has changed.
+				warnings = append(warnings, "Local commit message differs")
+			}
+		}
 	}
 	// Are there rejections?
 	rejected := false
@@ -233,7 +246,7 @@ func changeStatus(commit string, info *GerritChange) (string, []string) {
 	}
 
 	// Submittable? (Requires SUBMITTABLE option.)
-	status := "Pending"
+	status = "Pending"
 	if rejected {
 		status = "Rejected"
 	} else if info.Submittable {

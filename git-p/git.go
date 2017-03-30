@@ -71,6 +71,54 @@ func upstreamOf(ref string) string {
 	return out
 }
 
+// gitPatchID returns the git patch ID of commit, which is effectively
+// a hash of that commit's diff. See man git-patch-id for details.
+func gitPatchID(commit string) (string, error) {
+	var err error
+	// Run git diff-tree -p $commit -- | git patch-id --stable.
+	diffTree := exec.Command("git", "diff-tree", "-p", commit, "--")
+	patchID := exec.Command("git", "patch-id", "--stable")
+	r, w, err := os.Pipe()
+	if err != nil {
+		log.Fatal("failed to create pipe: ", err)
+	}
+	patchID.Stdin, diffTree.Stdout = r, w
+	if err := diffTree.Start(); err != nil {
+		log.Fatal("failed to start %s: ", shellEscapeList(diffTree.Args), err)
+	}
+	w.Close()
+	out, err := patchID.Output()
+	r.Close()
+	if err != nil {
+		if err, ok := err.(*exec.ExitError); ok {
+			fmt.Fprintf(os.Stderr, "%s\n", string(err.Stderr))
+		}
+		log.Fatalf("%s failed: %s", shellEscapeList(patchID.Args), err)
+	}
+	if diffTree.Wait() != nil {
+		return "", fmt.Errorf("bad revision %q", commit)
+	}
+	fs := bytes.Fields(out)
+	if len(fs) != 2 {
+		log.Fatal("unexpected output from %s: %s", shellEscapeList(patchID.Args), out)
+	}
+	return string(fs[0]), nil
+}
+
+// gitCommitMessage returns the commit message for commit.
+func gitCommitMessage(commit string) (string, error) {
+	// Get the commit object.
+	obj, err := tryGit("cat-file", "commit", commit)
+	if err != nil {
+		return "", fmt.Errorf("bad revision %q", commit)
+	}
+	// Extract the commit message.
+	if i := strings.Index(obj, "\n\n"); i >= 0 {
+		return obj[i+2:], nil
+	}
+	return "", nil
+}
+
 // changeIds returns the full Gerrit change IDs of each commit. The
 // change ID will be "" if missing.
 func changeIds(project, forBranch string, commits []string) []string {

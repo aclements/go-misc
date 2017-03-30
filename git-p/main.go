@@ -14,12 +14,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 )
-
-// TODO: Provide a way to exclude branches (like archive/, etc)
 
 // TODO: Do the right thing if the terminal is dumb.
 
@@ -32,17 +31,28 @@ const (
 
 func main() {
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [branches...]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "With no arguments, list branches from newest to oldest.\n")
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [branches...]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "With no arguments, list branches from newest to oldest.\n\n")
 		flag.PrintDefaults()
 	}
+	defIgnore, _ := tryGit("config", "p.ignore")
+	flagIgnore := flag.String("ignore", defIgnore, "ignore branches matching shell `pattern` [git config p.ignore]")
 	flag.Parse()
 	branches := flag.Args()
+	ignores := strings.Fields(*flagIgnore)
 
 	// Check the branch names.
 	for _, b := range branches {
 		if out, err := tryGit("rev-parse", b, "--"); err != nil {
 			fmt.Printf("%s\n", out)
+			os.Exit(1)
+		}
+	}
+
+	// Check ignore patterns.
+	for _, ig := range ignores {
+		if _, err := filepath.Match(ig, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "bad ignore pattern %q: %s", ig, err)
 			os.Exit(1)
 		}
 	}
@@ -83,6 +93,22 @@ func main() {
 
 		// Get all local branches, sorted by most recent commit date.
 		branches = lines(git("for-each-ref", "--format", "%(refname)", "--sort", "-committerdate", "refs/heads/"))
+		if len(ignores) > 0 {
+			nBranches := []string{}
+		branchLoop:
+			for _, b := range branches {
+				for _, ig := range ignores {
+					if m, _ := filepath.Match(ig, b); m {
+						continue branchLoop
+					}
+					if m, _ := filepath.Match("refs/heads/"+ig, b); m {
+						continue branchLoop
+					}
+				}
+				nBranches = append(nBranches, b)
+			}
+			branches = nBranches
+		}
 	}
 
 	// Show all branches.

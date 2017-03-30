@@ -154,6 +154,7 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 }
 
 var labelMsg = regexp.MustCompile(`^Patch Set [0-9]+: [-a-zA-Z]+\+[0-9]$`)
+var trybotFailures = regexp.MustCompile(`(?m)^Failed on ([^:]+):`)
 
 func changeStatus(commit string, info *GerritChange) (status string, warnings []string) {
 	switch info.Status {
@@ -239,8 +240,22 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 	}
 	// Are the trybots unhappy? (Requires LABELS option.)
 	if tbr := info.Labels["TryBot-Result"]; tbr != nil && tbr.Rejected != nil {
-		// TODO: List failed configs
-		warnings = append(warnings, "TryBots are unhappy")
+		// Get the failed configs. (Requires MESSAGES option.)
+		configs := []string{}
+		for _, msg := range info.Messages {
+			// Requires DETAILED_ACCOUNTS option.
+			if msg.PatchSet != curPatchSet || msg.Author.Email != "gobot@golang.org" {
+				continue
+			}
+			for _, f := range trybotFailures.FindAllStringSubmatch(msg.Message, -1) {
+				configs = append(configs, f[1])
+			}
+		}
+		if len(configs) == 0 {
+			warnings = append(warnings, "TryBots failed")
+		} else {
+			warnings = append(warnings, "TryBots failed on "+strings.Join(configs, ", "))
+		}
 	} else if tbr == nil || tbr.Approved == nil {
 		warnings = append(warnings, "TryBots not run")
 	}

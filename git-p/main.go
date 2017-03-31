@@ -4,9 +4,60 @@
 
 // Command git-p prints the status of pending commits on all branches.
 //
-// git-p summarizes the status of each commit, including its review
-// state in Gerrit and whether or not there are any comments or TryBot
-// failures.
+// git-p summarizes the status of each commit on every branch,
+// starting with HEAD and then the most recently committed-to branch.
+//
+// git-p shows the Gerrit status of each commit and performs several
+// status checks:
+//
+// * It checks if there are any local changes that haven't been mailed
+// (and is sensitive to rebases, so it won't complain if the diff
+// hasn't changed).
+//
+// * It checks if there are any rejections (-1 or -2), or if the CL is
+// marked "Do not submit".
+//
+// * It checks if there are any comments on the latest version of the
+// CL, which may indicate it needs changes even if it is submittable.
+//
+// * It checks if the trybots are sad or weren't run.
+//
+// The output is color-coded by status: green indicates a CL is
+// submittable and has no warnings, yellow indicates a CL has
+// warnings, and red indicates a CL has been rejected. Submitted CLs
+// are greyed out.
+//
+// git-p uses the git pager if one is configured.
+//
+// Currently git-p only supports the main Go repository.
+//
+// Example output
+//
+//  $ git-p gc-free-wbufs-v3
+//  gc-free-wbufs-v3
+//    Not mailed c1e17d722f fixup! runtime: allocate GC workbufs from manually-…
+//    Pending    326537d00c runtime: free workbufs during… [golang.org/cl/38582]
+//      Local commit message differs
+//      1 comment on latest PS from Rick Hudson
+//      TryBots failed on linux-386, windows-386-gce, nacl-386, linux-arm
+//    Ready      b3b8fef6cb runtime: allocate GC workbufs… [golang.org/cl/38581]
+//      1 comment on latest PS from Rick Hudson
+//      TryBots failed on windows-386-gce, linux-386, nacl-386, linux-arm
+//    Ready      5fc11e7173 runtime: eliminate write barr… [golang.org/cl/38580]
+//    Ready      b5c7f08ccb runtime: rename gcBits -> gcB… [golang.org/cl/38579]
+//    Pending    d9dd54b571 runtime: eliminate write barr… [golang.org/cl/38578]
+//      2 comments on latest PS from Rick Hudson, Austin Clements
+//      TryBots failed on linux-amd64
+//    Pending    b70f9f7dc2 runtime: don't count manually… [golang.org/cl/38577]
+//      1 comment on latest PS from Rick Hudson
+//    Ready      1eae861947 runtime: generalize {alloc,fr… [golang.org/cl/38576]
+//    Ready      670d05695f runtime: rename mspan.stackfr… [golang.org/cl/38575]
+//    Ready      3e531adf5f runtime: rename _MSpanStack -… [golang.org/cl/38574]
+//      1 comment on latest PS from Rick Hudson
+//    Ready      3e3125c7e5 runtime: initialize more fiel… [golang.org/cl/38573]
+//      2 comments on latest PS from Rick Hudson, Austin Clements
+//    Submitted  302daf57f6 runtime: improve systemstack-… [golang.org/cl/38572]
+//      Local commit message differs
 package main
 
 import (

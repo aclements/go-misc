@@ -71,7 +71,7 @@ import (
 	"unicode/utf8"
 )
 
-// TODO: Do the right thing if the terminal is dumb.
+// TODO: Local mode
 
 const (
 	// TODO: Support other repos.
@@ -108,7 +108,10 @@ func main() {
 		}
 	}
 
-	setupPager()
+	if !setupPager() {
+		// We're in a dumb terminal. Turn off control codes.
+		style = nil
+	}
 
 	// Find the Gerrit remote name.
 	remote, err := getRemote(remoteUrl)
@@ -222,9 +225,9 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 	go func() {
 		<-token
 		// Print changes.
-		fmt.Printf("\x1b[1;32m%s\x1b[0m", strings.TrimPrefix(branch, "refs/heads/"))
+		fmt.Printf("%s%s%s", style["branch"], strings.TrimPrefix(branch, "refs/heads/"), style["reset"])
 		if extra != "" {
-			fmt.Printf(" (\x1b[1;36m%s\x1b[0m)", extra)
+			fmt.Printf(" (%s%s%s)", style["symbolic-ref"], extra, style["reset"])
 		}
 		fmt.Printf("\n")
 		for i, change := range changes {
@@ -363,20 +366,6 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 
 var printChangeOptions = []string{"SUBMITTABLE", "LABELS", "CURRENT_REVISION", "MESSAGES", "DETAILED_ACCOUNTS"}
 
-var display = map[string]string{
-	"Not mailed": "\x1b[35m", // Magenta
-
-	"Pending warn":  "\x1b[33m",   // Yellow
-	"Ready warn":    "\x1b[33m",   // Yellow
-	"Rejected warn": "\x1b[1;31m", // Bright red
-
-	"Ready": "\x1b[32m", // Green
-
-	"Submitted": "\x1b[37m",   // Gray
-	"Abandoned": "\x1b[9;37m", // Gray, strike-through
-	"Draft":     "\x1b[37m",   // Gray
-}
-
 // printChange prints a summary of change's status and warnings.
 //
 // change must be retrieved with options printChangeOptions.
@@ -401,17 +390,17 @@ func printChange(commit string, change *GerritChanges) {
 
 	var control, eControl string
 	if len(warnings) != 0 {
-		if c, ok := display[status+" warn"]; ok {
+		if c, ok := style[status+" warn"]; ok {
 			control = c
 		}
 	}
 	if control == "" {
-		if c, ok := display[status]; ok {
+		if c, ok := style[status]; ok {
 			control = c
 		}
 	}
 	if control != "" {
-		eControl = "\x1b[0m"
+		eControl = style["reset"]
 	}
 
 	hdr := fmt.Sprintf("%-10s %s", status, logMsg)

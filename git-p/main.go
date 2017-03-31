@@ -71,8 +71,6 @@ import (
 	"unicode/utf8"
 )
 
-// TODO: Local mode
-
 const (
 	// TODO: Support other repos.
 	remoteUrl = "https://go.googlesource.com/go"
@@ -88,6 +86,7 @@ func main() {
 	}
 	defIgnore, _ := tryGit("config", "p.ignore")
 	flagIgnore := flag.String("ignore", defIgnore, "ignore branches matching shell `pattern` [git config p.ignore]")
+	flagLocal := flag.Bool("l", false, "local state only; don't query Gerrit")
 	flag.Parse()
 	branches := flag.Args()
 	ignores := strings.Fields(*flagIgnore)
@@ -125,7 +124,10 @@ func main() {
 		log.Fatalf("no refs for remote %s", remote)
 	}
 
-	gerrit := NewGerrit(gerritUrl)
+	var gerrit *Gerrit
+	if !*flagLocal {
+		gerrit = NewGerrit(gerritUrl)
+	}
 
 	// Pass a token through each showBranch so we can pipeline
 	// fetching branch information, while displaying it in order.
@@ -209,10 +211,12 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 	//
 	// We need DETAILED_LABELS to get numeric values of labels.
 	changes := make([]*GerritChanges, len(cids))
-	for i, cid := range cids {
-		// TODO: Would this be simpler with a single big OR query?
-		if cid != "" {
-			changes[i] = gerrit.QueryChanges("change:"+cid, printChangeOptions...)
+	if gerrit != nil {
+		for i, cid := range cids {
+			// TODO: Would this be simpler with a single big OR query?
+			if cid != "" {
+				changes[i] = gerrit.QueryChanges("change:"+cid, printChangeOptions...)
+			}
 		}
 	}
 
@@ -231,7 +235,7 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 		}
 		fmt.Printf("\n")
 		for i, change := range changes {
-			printChange(commits[i], change)
+			printChange(commits[i], change, gerrit == nil)
 		}
 		fmt.Println()
 		<-limit
@@ -369,7 +373,7 @@ var printChangeOptions = []string{"SUBMITTABLE", "LABELS", "CURRENT_REVISION", "
 // printChange prints a summary of change's status and warnings.
 //
 // change must be retrieved with options printChangeOptions.
-func printChange(commit string, change *GerritChanges) {
+func printChange(commit string, change *GerritChanges, local bool) {
 	logMsg := git("log", "-n1", "--oneline", commit)
 
 	status, warnings, link := "Not mailed", []string(nil), ""
@@ -386,6 +390,8 @@ func printChange(commit string, change *GerritChanges) {
 			//link = fmt.Sprintf("[%s/c/%d]", gerritUrl, results[0].Number)
 			link = fmt.Sprintf(" [golang.org/cl/%d]", results[0].Number)
 		}
+	} else if local {
+		status = ""
 	}
 
 	var control, eControl string
@@ -403,7 +409,10 @@ func printChange(commit string, change *GerritChanges) {
 		eControl = style["reset"]
 	}
 
-	hdr := fmt.Sprintf("%-10s %s", status, logMsg)
+	hdr := logMsg
+	if status != "" {
+		hdr = fmt.Sprintf("%-10s %s", status, logMsg)
+	}
 	hdrMax := 80 - len(link) - 2
 	if utf8.RuneCountInString(hdr) > hdrMax {
 		hdr = fmt.Sprintf("%*.*s…", hdrMax-1, hdrMax-1, hdr)

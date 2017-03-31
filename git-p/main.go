@@ -185,6 +185,13 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 	}
 
 	// Get commits from the branch to any upstream.
+	//
+	// TODO: This can be quite slow (50–100 ms). git is clearly
+	// reasonably clever about this, but it has to expand the
+	// exclusion list and can't share work across all of these
+	// branches. Maybe this should fully expand the exclusion set
+	// just once, do limited rev-lists, and cut them off at the
+	// exclusion set.
 	args := []string{"rev-list", branch}
 	for _, u := range upstreams {
 		args = append(args, "^"+u)

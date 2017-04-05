@@ -34,7 +34,7 @@
 // Example output
 //
 //  $ git-p gc-free-wbufs-v3
-//  gc-free-wbufs-v3
+//  gc-free-wbufs-v3 for master
 //    Not mailed c1e17d722f fixup! runtime: allocate GC workbufs from manually-…
 //    Pending    326537d00c runtime: free workbufs during… [golang.org/cl/38582]
 //      Local commit message differs
@@ -184,9 +184,12 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 
 	// Get the Gerrit upstream name so we can construct full
 	// Change-IDs.
+	var haveUpstream bool
 	upstream := upstreamOf(branch)
 	if upstream == "" {
-		upstream = "refs/" + remote + "/master"
+		upstream = "refs/remotes/" + remote + "/master"
+	} else {
+		haveUpstream = true
 	}
 
 	// Get commits from the branch to any upstream.
@@ -232,6 +235,9 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 		fmt.Printf("%s%s%s", style["branch"], strings.TrimPrefix(branch, "refs/heads/"), style["reset"])
 		if extra != "" {
 			fmt.Printf(" (%s%s%s)", style["symbolic-ref"], extra, style["reset"])
+		}
+		if haveUpstream {
+			fmt.Printf(" for %s", strings.TrimPrefix(upstream, "refs/remotes/"+remote+"/"))
 		}
 		fmt.Printf("\n")
 		for i, change := range changes {

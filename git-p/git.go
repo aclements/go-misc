@@ -64,6 +64,10 @@ func upstreamOf(ref string) string {
 	// for branch 'xxx'" if there's no upstream. It also fails
 	// with 128 and "fatal: HEAD does not point to a branch" if
 	// ref is not a branch or a symbolic ref to a branch.
+	//
+	// The @{u} syntax requires a branchname, not a refname, so
+	// strip the ref to a branch name.
+	ref = strings.TrimPrefix(ref, "refs/heads/")
 	out, err := tryGit("rev-parse", "--symbolic-full-name", ref+"@{u}")
 	if err != nil {
 		return ""

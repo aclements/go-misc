@@ -348,7 +348,12 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 	} else if tbr == nil || tbr.Approved == nil {
 		// TryBots haven't run. If it's submitted, we don't care.
 		if info.Status != "MERGED" {
-			warnings = append(warnings, "TryBots not run")
+			// Are they running?
+			if rtb := info.Labels["Run-TryBot"]; rtb != nil && rtb.Approved != nil {
+				warnings = append(warnings, "TryBots running")
+			} else {
+				warnings = append(warnings, "TryBots not run")
+			}
 		}
 	}
 

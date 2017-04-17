@@ -12,10 +12,8 @@ import (
 
 // TODO: Support plotting non-normalized results.
 
-func plot(t, git table.Grouping, configCols, resultCols []string) (*gg.Plot, int, int) {
+func plot(t table.Grouping, configCols, resultCols []string) (*gg.Plot, int, int) {
 	//t = table.Flatten(table.HeadTables(table.GroupBy(t, "name"), 9))
-
-	t = table.Join(t, "commit", git, "commit")
 
 	// Filter to just the master branch.
 	//

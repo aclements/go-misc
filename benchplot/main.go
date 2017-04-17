@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/aclements/go-gg/gg"
+	"github.com/aclements/go-gg/table"
 	"github.com/aclements/go-misc/bench"
 )
 
@@ -83,13 +84,19 @@ func main() {
 	bench.ParseValues(benchmarks, nil)
 
 	// Prepare gg tables.
+	var tab table.Grouping
 	btab, configCols, resultCols := benchmarksToTable(benchmarks)
-	gtab := commitsToTable(Commits(*flagGitDir))
+	if btab.Column("commit") == nil {
+		tab = btab
+	} else {
+		gtab := commitsToTable(Commits(*flagGitDir))
+		tab = table.Join(btab, "commit", gtab, "commit")
+	}
 
 	// Plot.
 	//
 	// TODO: Collect nrows/ncols from the plot itself.
-	p, nrows, ncols := plot(btab, gtab, configCols, resultCols)
+	p, nrows, ncols := plot(tab, configCols, resultCols)
 	if !(len(paths) == 1 && paths[0] == "-") {
 		p.Add(gg.Title(strings.Join(paths, " ")))
 	}

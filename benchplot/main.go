@@ -40,6 +40,7 @@ func main() {
 		flagMemProfile = flag.String("memprofile", "", "write heap profile to `file`")
 		flagGitDir     = flag.String("C", string(defaultGitDir), "run git in `dir`")
 		flagOut        = flag.String("o", "", "write output to `file` (default: stdout)")
+		flagTable      = flag.Bool("table", false, "output a table instead of a plot")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [inputs...]\n", os.Args[0])
@@ -54,6 +55,18 @@ func main() {
 		}
 		pprof.StartCPUProfile(f)
 		defer pprof.StopCPUProfile()
+	}
+
+	if *flagMemProfile != "" {
+		defer func() {
+			runtime.GC()
+			f, err := os.Create(*flagMemProfile)
+			if err != nil {
+				log.Fatal(err)
+			}
+			pprof.WriteHeapProfile(f)
+			f.Close()
+		}()
 	}
 
 	// Parse benchmark inputs.
@@ -93,15 +106,7 @@ func main() {
 		tab = table.Join(btab, "commit", gtab, "commit")
 	}
 
-	// Plot.
-	//
-	// TODO: Collect nrows/ncols from the plot itself.
-	p, nrows, ncols := plot(tab, configCols, resultCols)
-	if !(len(paths) == 1 && paths[0] == "-") {
-		p.Add(gg.Title(strings.Join(paths, " ")))
-	}
-
-	// Render plot.
+	// Prepare for output.
 	f := os.Stdout
 	if *flagOut != "" {
 		var err error
@@ -111,15 +116,21 @@ func main() {
 		}
 		defer f.Close()
 	}
-	p.WriteSVG(f, 500*ncols, 350*nrows)
 
-	if *flagMemProfile != "" {
-		runtime.GC()
-		f, err := os.Create(*flagMemProfile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		pprof.WriteHeapProfile(f)
-		f.Close()
+	// Output table.
+	if *flagTable {
+		table.Fprint(f, tab)
+		return
 	}
+
+	// Plot.
+	//
+	// TODO: Collect nrows/ncols from the plot itself.
+	p, nrows, ncols := plot(tab, configCols, resultCols)
+	if !(len(paths) == 1 && paths[0] == "-") {
+		p.Add(gg.Title(strings.Join(paths, " ")))
+	}
+
+	// Render plot.
+	p.WriteSVG(f, 500*ncols, 350*nrows)
 }

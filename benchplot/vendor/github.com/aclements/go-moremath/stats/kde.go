@@ -78,9 +78,9 @@ func BandwidthSilverman(data interface {
 func BandwidthScott(data interface {
 	StdDev() float64
 	Weight() float64
-	Percentile(float64) float64
+	Quantile(float64) float64
 }) float64 {
-	iqr := data.Percentile(0.75) - data.Percentile(0.25)
+	iqr := data.Quantile(0.75) - data.Quantile(0.25)
 	hScale := 1.06 * math.Pow(data.Weight(), -1.0/5)
 	stdDev := data.StdDev()
 	if stdDev < iqr/1.349 {

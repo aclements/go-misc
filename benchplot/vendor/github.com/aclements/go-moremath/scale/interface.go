@@ -33,6 +33,9 @@ type Quantitative interface {
 	// and last major ticks returned by Ticks(o) will equal the
 	// lower and upper bounds of the input domain.
 	Nice(o TickOptions)
+
+	// A Quantitative scale is also a Ticker.
+	Ticker
 }
 
 // A QQ maps from a source Quantitative scale to a destination

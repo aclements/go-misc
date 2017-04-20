@@ -33,20 +33,20 @@ type Histogram interface {
 	BinToValue(bin float64) float64
 }
 
-// HistogramPercentile returns the x such that n*percentile samples in
-// hist are <= x, assuming values are distibuted within each bin
-// according to hist's distibution.
+// HistogramQuantile returns the x such that n*q samples in hist are
+// <= x, assuming values are distibuted within each bin according to
+// hist's distribution.
 //
-// If the percentile'th sample falls below the lowest bin or above the
-// highest bin, returns NaN.
-func HistogramPercentile(hist Histogram, percentile float64) float64 {
+// If the q'th sample falls below the lowest bin or above the highest
+// bin, returns NaN.
+func HistogramQuantile(hist Histogram, q float64) float64 {
 	under, counts, over := hist.Counts()
 	total := under + over
 	for _, count := range counts {
 		total += count
 	}
 
-	goal := uint(float64(total) * percentile)
+	goal := uint(float64(total) * q)
 	if goal <= under || goal > total-over {
 		return math.NaN()
 	}
@@ -62,5 +62,5 @@ func HistogramPercentile(hist Histogram, percentile float64) float64 {
 // HistogramIQR returns the interquartile range of the samples in
 // hist.
 func HistogramIQR(hist Histogram) float64 {
-	return HistogramPercentile(hist, 0.75) - HistogramPercentile(hist, 0.25)
+	return HistogramQuantile(hist, 0.75) - HistogramQuantile(hist, 0.25)
 }

@@ -153,8 +153,15 @@ func (p *Plot) getScales(aes string) scalerTree {
 	return st
 }
 
+func (p *Plot) copyScales(old, new table.GroupID) {
+	for _, st := range p.scales {
+		st.scales[new] = st.find(old)
+	}
+}
+
 // SetScale binds a scale to the given visual aesthetic. SetScale is
-// shorthand for SetScaleAt(aes, s, table.RootGroupID).
+// shorthand for SetScaleAt(aes, s, table.RootGroupID). SetScale must
+// be called before Add.
 //
 // SetScale returns p for ease of chaining.
 func (p *Plot) SetScale(aes string, s Scaler) *Plot {
@@ -162,7 +169,8 @@ func (p *Plot) SetScale(aes string, s Scaler) *Plot {
 }
 
 // SetScaleAt binds a scale to the given visual aesthetic for all data
-// in group gid or descendants of gid.
+// in group gid or descendants of gid. SetScaleAt must be called
+// before Add.
 func (p *Plot) SetScaleAt(aes string, s Scaler, gid table.GroupID) *Plot {
 	// TODO: Should aes be an enum so you can't mix up aesthetics
 	// and column names?

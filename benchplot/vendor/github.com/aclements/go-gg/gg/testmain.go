@@ -38,7 +38,7 @@ func main() {
 	xs := vec.Concat(xs1, xs2)
 	ys := vec.Concat(ys1, ys2)
 
-	tab := new(table.Table).Add("x", xs).Add("y", ys).Add("which", which)
+	tab := table.NewBuilder(nil).Add("x", xs).Add("y", ys).Add("which", which).Done()
 
 	plot := gg.NewPlot(tab)
 	plot.GroupAuto()

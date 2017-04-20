@@ -99,7 +99,9 @@ func Fprint(w io.Writer, g Grouping, formats ...string) error {
 	rowFmt := strings.Join(rowFmts, "  ") + "\n"
 	rowBuf := make([]interface{}, len(rowFmts))
 	for row := 0; row < len(ss[0]); row++ {
-		if len(groupPos) > 0 && row == groupPos[0] {
+		// Print group headers. There may be more than one if
+		// there are empty groups.
+		for len(groupPos) > 0 && row == groupPos[0] {
 			_, err := fmt.Fprintf(w, "-- %s\n", groups[0])
 			if err != nil {
 				return err

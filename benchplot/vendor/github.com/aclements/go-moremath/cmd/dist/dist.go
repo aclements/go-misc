@@ -57,7 +57,7 @@ func main() {
 		if !ok {
 			label = fmt.Sprintf("%d%%ile", p)
 		}
-		fmt.Printf("%8s %.6g\n", label, s.Percentile(float64(p)/100))
+		fmt.Printf("%8s %.6g\n", label, s.Quantile(float64(p)/100))
 	}
 	fmt.Println()
 

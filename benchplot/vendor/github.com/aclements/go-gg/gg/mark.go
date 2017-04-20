@@ -59,6 +59,43 @@ func (m *markPath) mark(env *renderEnv, canvas *svg.SVG) {
 	drawPath(canvas, xs, ys, stroke, fill)
 }
 
+type markArea struct {
+	x, upper, lower, fill, fillOpacity *scaledData
+}
+
+func reversed(data []float64) []float64 {
+	var rev []float64
+	for i := len(data) - 1; i >= 0; i-- {
+		rev = append(rev, data[i])
+	}
+	return rev
+}
+
+func (m *markArea) mark(env *renderEnv, canvas *svg.SVG) {
+	xs := env.get(m.x).([]float64)
+	upper := env.get(m.upper).([]float64)
+	lower := env.get(m.lower).([]float64)
+	var fill color.Color = color.Black
+	if m.fill != nil {
+		fill = env.getFirst(m.fill).(color.Color)
+	}
+	fillOpacity := 0.5
+	if m.fillOpacity != nil {
+		fillOpacity = env.getFirst(m.fillOpacity).(float64)
+	}
+	r, g, b, a := fill.RGBA()
+	fill = color.RGBA64{
+		uint16(float64(r) * fillOpacity),
+		uint16(float64(g) * fillOpacity),
+		uint16(float64(b) * fillOpacity),
+		uint16(float64(a) * fillOpacity)}
+
+	xs = append(xs, reversed(xs)...)
+	ys := append(upper, reversed(lower)...)
+
+	drawPath(canvas, xs, ys, color.Transparent, fill)
+}
+
 type markSteps struct {
 	dir StepMode
 
@@ -150,7 +187,7 @@ func drawPath(canvas *svg.SVG, xs, ys []float64, stroke color.Color, fill color.
 	// XXX Stroke width
 
 	style := cssPaint("stroke", stroke) + ";" + cssPaint("fill", fill) + ";stroke-width:3"
-	canvas.Path(string(path), style)
+	canvas.Path(wrapPath(string(path)), style)
 }
 
 type markPoint struct {
@@ -206,7 +243,9 @@ func (m *markTiles) mark(env *renderEnv, canvas *svg.SVG) {
 	// are color.Color? How would this work with an identity
 	// scaler?
 	var fills []color.Color
-	slice.Convert(&fills, env.get(m.fill))
+	if m.fill != nil {
+		slice.Convert(&fills, env.get(m.fill))
+	}
 
 	// TODO: We can't use an <image> this if the width and height
 	// are specified, or if there is a stroke.
@@ -275,11 +314,15 @@ func (m *markTiles) mark(env *renderEnv, canvas *svg.SVG) {
 	// Create the image.
 	iw, ih := round((xmax-xmin+xgap)/xgap), round((ymax-ymin+ygap)/ygap)
 	img := image.NewRGBA(image.Rect(0, 0, iw, ih))
+	fill := color.Color(color.Black)
 	for i := range xs {
 		if !isFinite(xs[i]) || !isFinite(ys[i]) {
 			continue
 		}
-		img.Set(round((xs[i]-xmin)/xgap), round((ys[i]-ymin)/ygap), fills[i])
+		if fills != nil {
+			fill = fills[i]
+		}
+		img.Set(round((xs[i]-xmin)/xgap), round((ys[i]-ymin)/ygap), fill)
 	}
 
 	// Encode the image.
@@ -298,26 +341,27 @@ func (m *markTiles) mark(env *renderEnv, canvas *svg.SVG) {
 type markTags struct {
 	x, y   *scaledData
 	labels map[table.GroupID]table.Slice
+	hpos   float64
+
+	offsetX, offsetY int
 }
 
 func (m *markTags) mark(env *renderEnv, canvas *svg.SVG) {
-	const offsetX float64 = -20
-	const offsetY float64 = -20
-	const padX float64 = 5
+	const padX = 5
 
 	xs, ys := env.get(m.x).([]float64), env.get(m.y).([]float64)
 	if len(xs) == 0 {
 		return
 	}
 
-	// Find the point closest to the middle.
+	// Find the point closest to hpos between the min and max.
 	//
 	// TODO: Give the user control over this.
 	minx, maxx := stats.Bounds(xs)
-	avgx := (minx + maxx) / 2
-	midi, middelta := 0, math.Abs(xs[0]-avgx)
+	targetx := minx + (maxx-minx)*m.hpos
+	midi, middelta := 0, math.Abs(xs[0]-targetx)
 	for i, x := range xs {
-		delta := math.Abs(x - avgx)
+		delta := math.Abs(x - targetx)
 		if delta < middelta {
 			midi, middelta = i, delta
 		}
@@ -332,11 +376,20 @@ func (m *markTags) mark(env *renderEnv, canvas *svg.SVG) {
 	//
 	// TODO: Make automatic positioning account for bounds of plot.
 	//
+	// TODO: Adjust positions to avoid overlap. Unfortunately,
+	// this requires some global optimization, but mark only sees
+	// one tag at a time.
+	//
 	// TODO: Re-enable the tag box when I have decent text metrics.
 	//t := measureString(fontSize, label)
 	//canvas.Rect(int(xs[midi]+offsetX-t.width), int(ys[midi]+offsetY-0.75*t.leading), int(t.width), int(1.5*t.leading), `rx="4"`, `fill="white"`, `stroke="black"`)
-	canvas.Text(int(xs[midi]+offsetX-padX), int(ys[midi]+offsetY), label, `dy=".3em"`, `text-anchor="end"`)
-	canvas.Path(fmt.Sprintf("M%.6g %.6gc%.6g %.6g,%.6g %.6g,%.6g %.6g", xs[midi], ys[midi], 0.8*offsetX, 0.0, 0.2*offsetX, offsetY, offsetX, offsetY), `fill="none"`, `stroke="black"`, `stroke-dasharray="2, 3"`, `stroke-width="2"`)
+	if m.offsetX > 0 {
+		// To the right, left-aligned.
+		canvas.Text(int(xs[midi])+m.offsetX+padX, int(ys[midi])+m.offsetY, label, `dy=".3em"`)
+	} else {
+		canvas.Text(int(xs[midi])+m.offsetX-padX, int(ys[midi])+m.offsetY, label, `dy=".3em"`, `text-anchor="end"`)
+	}
+	canvas.Path(fmt.Sprintf("M%.6g %.6gc%.6g %.6g,%.6g %.6g,%.6g %.6g", xs[midi], ys[midi], 0.8*float64(m.offsetX), 0.0, 0.2*float64(m.offsetX), float64(m.offsetY), float64(m.offsetX), float64(m.offsetY)), `fill="none"`, `stroke="black"`, `stroke-dasharray="2, 3"`, `stroke-width="2"`)
 }
 
 type markTooltips struct {
@@ -405,12 +458,12 @@ function tooltipMove(evt, data, tid, minx, maxx) {
 	var pt = svg.createSVGPoint();
 	pt.x = evt.clientX;
 	pt.y = evt.clientY;
-	var ex = pt.matrixTransform(svg.getScreenCTM().inverse()).x;
+	var epos = pt.matrixTransform(svg.getScreenCTM().inverse());
 
 	// Find data point closest to event coordinate.
-	var cd = Math.abs(ex-data.x[0]), ci = 0;
+	var cd = Math.sqrt(Math.pow(epos.x-data.x[0], 2) + Math.pow(epos.y-data.y[0], 2)), ci = 0;
 	for (var i = 1; i < data.x.length; i++) {
-		var d = Math.abs(ex-data.x[i]);
+		var d = Math.sqrt(Math.pow(epos.x-data.x[i], 2) + Math.pow(epos.y-data.y[i], 2));
 		if (d < cd) { cd = d; ci = i; }
 	}
 

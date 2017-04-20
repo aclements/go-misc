@@ -217,23 +217,25 @@ func (s Sample) StdDev() float64 {
 	panic("Weighted StdDev not implemented")
 }
 
-// Percentile returns the pctileth value from the Sample. This uses
-// interpolation method R8 from Hyndman and Fan (1996).
+// Quantile returns the sample value X at which q*weight of the sample
+// is <= X. This uses interpolation method R8 from Hyndman and Fan
+// (1996).
 //
-// pctile will be capped to the range [0, 1]. If len(xs) == 0 or all
+// q will be capped to the range [0, 1]. If len(xs) == 0 or all
 // weights are 0, returns NaN.
 //
-// Percentile(0.5) is the median. Percentile(0.25) and
-// Percentile(0.75) are the first and third quartiles, respectively.
+// Quantile(0.5) is the median. Quantile(0.25) and Quantile(0.75) are
+// the first and third quartiles, respectively. Quantile(P/100) is the
+// P'th percentile.
 //
 // This is constant time if s.Sorted and s.Weights == nil.
-func (s Sample) Percentile(pctile float64) float64 {
+func (s Sample) Quantile(q float64) float64 {
 	if len(s.Xs) == 0 {
 		return math.NaN()
-	} else if pctile <= 0 {
+	} else if q <= 0 {
 		min, _ := s.Bounds()
 		return min
-	} else if pctile >= 1 {
+	} else if q >= 1 {
 		_, max := s.Bounds()
 		return max
 	}
@@ -245,8 +247,8 @@ func (s Sample) Percentile(pctile float64) float64 {
 
 	if s.Weights == nil {
 		N := float64(len(s.Xs))
-		//n := pctile * (N + 1) // R6
-		n := 1/3.0 + pctile*(N+1/3.0) // R8
+		//n := q * (N + 1) // R6
+		n := 1/3.0 + q*(N+1/3.0) // R8
 		kf, frac := math.Modf(n)
 		k := int(kf)
 		if k <= 0 {
@@ -258,7 +260,7 @@ func (s Sample) Percentile(pctile float64) float64 {
 	} else {
 		// TODO(austin): Implement interpolation
 
-		target := s.Weight() * pctile
+		target := s.Weight() * q
 
 		// TODO(austin) If we had cumulative weights, we could
 		// do this in log time.
@@ -279,7 +281,7 @@ func (s Sample) IQR() float64 {
 	if !s.Sorted {
 		s = *s.Copy().Sort()
 	}
-	return s.Percentile(0.75) - s.Percentile(0.25)
+	return s.Quantile(0.75) - s.Quantile(0.25)
 }
 
 type sampleSorter struct {

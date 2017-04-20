@@ -145,6 +145,56 @@ func (l LayerPaths) apply(p *Plot, sort bool) {
 	}, p.Data().Tables()})
 }
 
+// LayerArea shades the area between two columns with a polygon. It is
+// useful in conjunction with ggstat.AggMax and ggstat.AggMin for
+// drawing the extents of data.
+type LayerArea struct {
+	// X names the column that defines the input of each point. If
+	// this is empty, it defaults to the first column.
+	X string
+
+	// Upper and Lower name columns that define the range of
+	// response to shade. If either is "", it defaults to a
+	// constant 0 value.
+	Upper, Lower string
+
+	// Fill names a column that defines the fill color of each
+	// area. If Fill is "", it defaults to black. Otherwise, the
+	// data is grouped by Fill.
+	Fill string
+
+	// FillOpacity names a column that defines the fill opacity of
+	// each area. If FillOpacity is "", it defaults to 0.5.
+	// Otherwise, the data is grouped by FillOpacity.
+	FillOpacity string
+}
+
+func (l LayerArea) Apply(p *Plot) {
+	defaultCols(p, &l.X)
+	if l.Fill != "" {
+		p.GroupBy(l.Fill)
+	}
+	if l.FillOpacity != "" {
+		p.GroupBy(l.FillOpacity)
+	}
+	defer p.Save().Restore()
+	p = p.SortBy(l.X)
+	upper, lower := l.Upper, l.Lower
+	if upper == "" {
+		upper = p.Const(0)
+	}
+	if lower == "" {
+		lower = p.Const(0)
+	}
+	p.marks = append(p.marks, plotMark{&markArea{
+		p.use("x", l.X),
+		p.use("y", upper),
+		p.use("y", lower),
+		p.use("fill", l.Fill),
+		p.use("opacity", l.FillOpacity),
+	}, p.Data().Tables()})
+}
+
 // LayerPoints layers a point mark at each data point.
 type LayerPoints struct {
 	// X and Y name columns that define input and response of each
@@ -244,6 +294,18 @@ type LayerTags struct {
 	// Label names the column that gives the text to put in the
 	// tag at X, Y. Label is required.
 	Label string
+
+	// HPos controls the horizontal position of the tag if
+	// multiple points have the same Label. The label will be
+	// attached to the point closest to HPos between the left-most
+	// (HPos == 0) and the right-most (HPos == 1) points on this
+	// curve.
+	HPos float64
+
+	// Offset controls the pixel offset of the tag from the point
+	// it is attached to. If these are both zero, they are treated
+	// as -20, -20.
+	OffsetX, OffsetY int
 }
 
 func (l LayerTags) Apply(p *Plot) {
@@ -251,6 +313,9 @@ func (l LayerTags) Apply(p *Plot) {
 	// always on top and can perhaps extend outside the plot area?
 
 	defaultCols(p, &l.X, &l.Y)
+	if l.OffsetX == 0 && l.OffsetY == 0 {
+		l.OffsetX, l.OffsetY = -20, -20
+	}
 	defer p.Save().Restore()
 	p.GroupBy(l.Label)
 	// TODO: I keep wanting an abstraction for a column across
@@ -264,6 +329,9 @@ func (l LayerTags) Apply(p *Plot) {
 		p.use("x", l.X),
 		p.use("y", l.Y),
 		labels,
+		l.HPos,
+		l.OffsetX,
+		l.OffsetY,
 	}, p.Data().Tables()})
 }
 
@@ -289,9 +357,11 @@ func (l LayerTooltips) Apply(p *Plot) {
 
 	// Split up by subplot and flatten each subplot.
 	tables := map[*subplot][]*table.Table{}
+	gids := map[*subplot]table.GroupID{}
 	for _, gid := range p.Data().Tables() {
 		s := subplotOf(gid)
 		tables[s] = append(tables[s], p.Data().Table(gid))
+		gids[s] = gid
 	}
 	var ng table.GroupingBuilder
 	for k, ts := range tables {
@@ -299,7 +369,9 @@ func (l LayerTooltips) Apply(p *Plot) {
 		for i, t := range ts {
 			subg.Add(table.RootGroupID.Extend(i), t)
 		}
-		ng.Add(table.RootGroupID.Extend(k), table.Flatten(subg.Done()))
+		ngid := table.RootGroupID.Extend(k)
+		ng.Add(ngid, table.Flatten(subg.Done()))
+		p.copyScales(gids[k], ngid)
 	}
 	p.SetData(ng.Done())
 

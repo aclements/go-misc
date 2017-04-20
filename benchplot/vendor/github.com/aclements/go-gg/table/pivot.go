@@ -5,6 +5,7 @@
 package table
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/aclements/go-gg/generic"
@@ -133,7 +134,7 @@ func Unpivot(g Grouping, label, value string, cols ...string) Grouping {
 			if i == 0 {
 				vt = colvs[i].Type()
 			} else if vt != colvs[i].Type() {
-				panic(&generic.TypeError{vt, colvs[i].Type(), "; cannot Unpivot columns with different types"})
+				panic(&generic.TypeError{vt, colvs[i].Type(), fmt.Sprintf("; cannot Unpivot columns %q and %q with different types", cols[0], col)})
 			}
 		}
 

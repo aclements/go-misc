@@ -6,9 +6,9 @@ package stats
 
 import "testing"
 
-func TestSamplePercentile(t *testing.T) {
+func TestSampleQuantile(t *testing.T) {
 	s := Sample{Xs: []float64{15, 20, 35, 40, 50}}
-	testFunc(t, "Percentile", s.Percentile, map[float64]float64{
+	testFunc(t, "Quantile", s.Quantile, map[float64]float64{
 		-1:  15,
 		0:   15,
 		.05: 15,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 
 	"github.com/aclements/go-gg/generic/slice"
@@ -33,17 +34,14 @@ func plot(t, git table.Grouping, configCols, resultCols []string) (*gg.Plot, int
 	plot.SortBy("commit date")
 	plot.Stat(commitIndex{})
 
-	// Average each result at each commit (but keep columns names
-	// the same to keep things easier to read).
-	plot.Stat(ggstat.Agg("commit", "name")(ggstat.AggMean(resultCols...)))
-	for _, rcol := range resultCols {
-		plot.SetData(table.Rename(plot.Data(), "mean "+rcol, rcol))
-	}
-
 	// Unpivot all of the metrics into one column.
 	plot.Stat(convertFloat{resultCols})
 	plot.SetData(table.Unpivot(plot.Data(), "metric", "result", resultCols...))
-	y := "result"
+
+	// Average each result at each commit (but keep columns names
+	// the same to keep things easier to read).
+	plot.Stat(ggstat.Agg("commit", "name", "metric", "branch", "commit index")(ggstat.AggMean("result"), ggstat.AggMin("result"), ggstat.AggMax("result")))
+	y := "mean result"
 
 	// Normalize to earliest commit on master. It's important to
 	// do this before the geomean if there are commits missing.
@@ -51,33 +49,45 @@ func plot(t, git table.Grouping, configCols, resultCols []string) (*gg.Plot, int
 	// group by name and metric, since the geomean needs to be
 	// done on a different grouping.
 	plot.GroupBy("name", "metric")
-	plot.Stat(ggstat.Normalize{X: "branch", By: firstMasterIndex, Cols: []string{"result"}})
+	plot.Stat(ggstat.Normalize{X: "branch", By: firstMasterIndex, Cols: []string{"mean result", "max result", "min result"}, DenomCols: []string{"mean result", "mean result", "mean result"}})
 	y = "normalized " + y
-	plot.SetData(table.Remove(plot.Data(), "result"))
+	for _, col := range []string{"mean result", "max result", "min result"} {
+		plot.SetData(table.Remove(plot.Data(), col))
+	}
 	plot.SetData(table.Ungroup(table.Ungroup(plot.Data())))
 
 	// Compute geomean for each metric at each commit if there's
 	// more than one benchmark.
 	if len(table.GroupBy(t, "name").Tables()) > 1 {
 		gt := removeNaNs(plot.Data(), y)
-		gt = ggstat.Agg("commit", "metric")(ggstat.AggGeoMean(y)).F(gt)
+		gt = ggstat.Agg("commit", "metric", "branch", "commit index")(ggstat.AggGeoMean(y), ggstat.AggMin("normalized min result"), ggstat.AggMax("normalized max result")).F(gt)
 		gt = table.MapTables(gt, func(_ table.GroupID, t *table.Table) *table.Table {
 			return table.NewBuilder(t).AddConst("name", " geomean").Done()
 		})
 		gt = table.Rename(gt, "geomean "+y, y)
+		gt = table.Rename(gt, "min normalized min result", "normalized min result")
+		gt = table.Rename(gt, "max normalized max result", "normalized max result")
 		plot.SetData(table.Concat(plot.Data(), gt))
 		nrows++
 	}
 
+	// Always show Y=0.
+	plot.SetScale("y", gg.NewLinearScaler().Include(0))
+
 	// Facet by name and metric.
-	plot.Add(gg.FacetY{Col: "name"}, gg.FacetX{Col: "metric"})
+	plot.Add(gg.FacetY{Col: "name"}, gg.FacetX{Col: "metric", SplitYScales: true})
 
 	// Filter the data to reduce noise.
 	plot.Stat(kza{y, 15, 3})
 	y = "filtered " + y
 
-	// Always show Y=0.
-	plot.SetScale("y", gg.NewLinearScaler().Include(0))
+	plot.Add(gg.LayerArea{
+		X:     "commit index",
+		Upper: "normalized max result",
+		Lower: "normalized min result",
+		Fill:  plot.Const(color.Gray{192}),
+		//Color: "branch",
+	})
 
 	plot.Add(gg.LayerLines{
 		X: "commit index",

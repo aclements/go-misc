@@ -105,6 +105,34 @@ func (s *Linear) spacingAtLevel(level int, roundOut bool) (firstN, lastN, spacin
 	return
 }
 
+// CountTicks returns the number of ticks in [s.Min, s.Max] at the
+// given tick level.
+func (s Linear) CountTicks(level int) int {
+	return linearTicker{&s, false}.CountTicks(level)
+}
+
+// TicksAtLevel returns the tick locations in [s.Min, s.Max] as a
+// []float64 at the given tick level in ascending order.
+func (s Linear) TicksAtLevel(level int) interface{} {
+	return linearTicker{&s, false}.TicksAtLevel(level)
+}
+
+type linearTicker struct {
+	s        *Linear
+	roundOut bool
+}
+
+func (t linearTicker) CountTicks(level int) int {
+	firstN, lastN, _ := t.s.spacingAtLevel(level, t.roundOut)
+	return int(lastN - firstN + 1)
+}
+
+func (t linearTicker) TicksAtLevel(level int) interface{} {
+	firstN, lastN, spacing := t.s.spacingAtLevel(level, t.roundOut)
+	n := int(lastN - firstN + 1)
+	return vec.Linspace(firstN*spacing, lastN*spacing, n)
+}
+
 func (s Linear) Ticks(o TickOptions) (major, minor []float64) {
 	if o.Max <= 0 {
 		return nil, nil
@@ -114,24 +142,11 @@ func (s Linear) Ticks(o TickOptions) (major, minor []float64) {
 		s.Min, s.Max = s.Max, s.Min
 	}
 
-	// nticksAtLevel returns the number of ticks in [s.Min, s.Max]
-	// at the given level.
-	nticksAtLevel := func(level int) int {
-		firstN, lastN, _ := s.spacingAtLevel(level, false)
-		return int(lastN - firstN + 1)
-	}
-
-	ticksAtLevel := func(level int) []float64 {
-		firstN, lastN, spacing := s.spacingAtLevel(level, false)
-		n := int(lastN - firstN + 1)
-		return vec.Linspace(firstN*spacing, lastN*spacing, n)
-	}
-
-	level, ok := o.FindLevel(nticksAtLevel, ticksAtLevel, s.guessLevel())
+	level, ok := o.FindLevel(linearTicker{&s, false}, s.guessLevel())
 	if !ok {
 		return nil, nil
 	}
-	return ticksAtLevel(level), ticksAtLevel(level - 1)
+	return s.TicksAtLevel(level).([]float64), s.TicksAtLevel(level - 1).([]float64)
 }
 
 func (s *Linear) Nice(o TickOptions) {
@@ -142,18 +157,7 @@ func (s *Linear) Nice(o TickOptions) {
 		s.Min, s.Max = s.Max, s.Min
 	}
 
-	nticksAtLevel := func(level int) int {
-		firstN, lastN, _ := s.spacingAtLevel(level, true)
-		return int(lastN - firstN + 1)
-	}
-
-	ticksAtLevel := func(level int) []float64 {
-		firstN, lastN, spacing := s.spacingAtLevel(level, true)
-		n := int(lastN - firstN + 1)
-		return vec.Linspace(firstN*spacing, lastN*spacing, n)
-	}
-
-	level, ok := o.FindLevel(nticksAtLevel, ticksAtLevel, s.guessLevel())
+	level, ok := o.FindLevel(linearTicker{s, true}, s.guessLevel())
 	if !ok {
 		return
 	}

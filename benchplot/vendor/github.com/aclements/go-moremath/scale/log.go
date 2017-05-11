@@ -130,58 +130,64 @@ func (s *Log) spacingAtLevel(level int, roundOut bool) (firstN, lastN, ebase flo
 	return
 }
 
-func (s *Log) tickFuncs(roundOut bool) (func(level int) int, func(level int) []float64) {
-	neg, min, max := s.ebounds()
+func (s *Log) CountTicks(level int) int {
+	return logTicker{s, false}.CountTicks(level)
+}
 
-	// nticksAtLevel returns the number of ticks in [min, max] at
-	// the given level.
-	nticksAtLevel := func(level int) int {
-		if level < 0 {
-			const maxInt = int(^uint(0) >> 1)
-			return maxInt
-		}
+func (s *Log) TicksAtLevel(level int) interface{} {
+	return logTicker{s, false}.TicksAtLevel(level)
+}
 
-		firstN, lastN, _ := s.spacingAtLevel(level, roundOut)
-		return int(lastN - firstN + 1)
+type logTicker struct {
+	s        *Log
+	roundOut bool
+}
+
+func (t logTicker) CountTicks(level int) int {
+	if level < 0 {
+		const maxInt = int(^uint(0) >> 1)
+		return maxInt
 	}
 
-	ticksAtLevel := func(level int) []float64 {
-		ticks := []float64{}
+	firstN, lastN, _ := t.s.spacingAtLevel(level, t.roundOut)
+	return int(lastN - firstN + 1)
+}
 
-		if level < 0 {
-			// Minor ticks for level 0. Get the major
-			// ticks, but round out so we can fill in
-			// minor ticks outside of the major ticks.
-			firstN, lastN, _ := s.spacingAtLevel(0, true)
-			for n := firstN; n <= lastN; n++ {
-				tick := math.Pow(float64(s.Base), n)
-				step := tick
-				for i := 0; i < s.Base-1; i++ {
-					if min <= tick && tick <= max {
-						ticks = append(ticks, tick)
-					}
-					tick += step
+func (t logTicker) TicksAtLevel(level int) interface{} {
+	neg, min, max := t.s.ebounds()
+	ticks := []float64{}
+
+	if level < 0 {
+		// Minor ticks for level 0. Get the major
+		// ticks, but round out so we can fill in
+		// minor ticks outside of the major ticks.
+		firstN, lastN, _ := t.s.spacingAtLevel(0, true)
+		for n := firstN; n <= lastN; n++ {
+			tick := math.Pow(float64(t.s.Base), n)
+			step := tick
+			for i := 0; i < t.s.Base-1; i++ {
+				if min <= tick && tick <= max {
+					ticks = append(ticks, tick)
 				}
-			}
-		} else {
-			firstN, lastN, base := s.spacingAtLevel(level, roundOut)
-			for n := firstN; n <= lastN; n++ {
-				ticks = append(ticks, math.Pow(base, n))
+				tick += step
 			}
 		}
-
-		if neg {
-			// Negate and reverse order of ticks.
-			for i := 0; i < (len(ticks)+1)/2; i++ {
-				j := len(ticks) - i - 1
-				ticks[i], ticks[j] = -ticks[j], -ticks[i]
-			}
+	} else {
+		firstN, lastN, base := t.s.spacingAtLevel(level, t.roundOut)
+		for n := firstN; n <= lastN; n++ {
+			ticks = append(ticks, math.Pow(base, n))
 		}
-
-		return ticks
 	}
 
-	return nticksAtLevel, ticksAtLevel
+	if neg {
+		// Negate and reverse order of ticks.
+		for i := 0; i < (len(ticks)+1)/2; i++ {
+			j := len(ticks) - i - 1
+			ticks[i], ticks[j] = -ticks[j], -ticks[i]
+		}
+	}
+
+	return ticks
 }
 
 func (s Log) Ticks(o TickOptions) (major, minor []float64) {
@@ -190,13 +196,13 @@ func (s Log) Ticks(o TickOptions) (major, minor []float64) {
 	} else if s.Min == s.Max {
 		return []float64{s.Min}, []float64{s.Max}
 	}
-	count, ticks := s.tickFuncs(false)
+	t := logTicker{&s, false}
 
-	level, ok := o.FindLevel(count, ticks, 0)
+	level, ok := o.FindLevel(t, 0)
 	if !ok {
 		return nil, nil
 	}
-	return ticks(level), ticks(level - 1)
+	return t.TicksAtLevel(level).([]float64), t.TicksAtLevel(level - 1).([]float64)
 }
 
 func (s *Log) Nice(o TickOptions) {
@@ -204,9 +210,9 @@ func (s *Log) Nice(o TickOptions) {
 		return
 	}
 	neg, _, _ := s.ebounds()
-	count, ticks := s.tickFuncs(true)
+	t := logTicker{s, true}
 
-	level, ok := o.FindLevel(count, ticks, 0)
+	level, ok := o.FindLevel(t, 0)
 	if !ok {
 		return
 	}

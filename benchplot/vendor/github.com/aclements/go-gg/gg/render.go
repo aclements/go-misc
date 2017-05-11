@@ -5,6 +5,7 @@
 package gg
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -208,17 +209,21 @@ func (e *eltSubplot) render(r *eltRender) {
 	x, y, w, h := e.Layout()
 	m := e.plotMargins
 
+	// Round the bounds rectangle in.
+	x2i, y2i := int(x+w), int(y+h)
+	xi, yi := int(math.Ceil(x)), int(math.Ceil(y))
+	wi, hi := x2i-xi, y2i-yi
+
 	// Create clip region for plot area.
 	clipId, clipRef := r.genid("clip")
 	svg.ClipPath(`id="` + clipId + `"`)
-	svg.Rect(int(x), int(y), int(w), int(h))
+	svg.Rect(xi, yi, wi, hi)
 	svg.ClipEnd()
 	svg.Group(`clip-path="` + clipRef + `"`)
-	defer svg.Gend()
 
 	// Set scale ranges.
-	xRanger := NewFloatRanger(x+m.l, x+w-m.r)
-	yRanger := NewFloatRanger(y+h-m.b, y+m.t)
+	xRanger := NewFloatRanger(float64(xi)+m.l, float64(x2i)-m.r)
+	yRanger := NewFloatRanger(float64(y2i)-m.b, float64(yi)+m.t)
 	for s := range e.scales["x"] {
 		s.Ranger(xRanger)
 	}
@@ -227,18 +232,18 @@ func (e *eltSubplot) render(r *eltRender) {
 	}
 
 	// Render grid.
-	renderBackground(svg, x, y, w, h)
+	renderBackground(svg, xi, yi, wi, hi)
 	for s := range e.scales["x"] {
-		renderGrid(svg, 'x', s, e.xTicks.ticks[s], y, y+h)
+		renderGrid(svg, 'x', s, e.xTicks.ticks[s], yi, y2i)
 	}
 	for s := range e.scales["y"] {
-		renderGrid(svg, 'y', s, e.yTicks.ticks[s], x, x+w)
+		renderGrid(svg, 'y', s, e.yTicks.ticks[s], xi, x2i)
 	}
 
 	// Create rendering environment.
 	env := &renderEnv{
 		cache: make(map[renderCacheKey]table.Slice),
-		area:  [4]float64{x, y, w, h},
+		area:  [4]float64{float64(xi), float64(yi), float64(wi), float64(hi)},
 	}
 
 	// Render marks.
@@ -249,39 +254,32 @@ func (e *eltSubplot) render(r *eltRender) {
 		}
 	}
 
-	// Skip border and scale ticks.
+	// End clip region.
+	svg.Gend()
+
+	// Draw border and scale ticks.
 	//
 	// TODO: Theme.
-	return
 
 	// Render border.
-	rnd := func(x float64) float64 {
-		// Round to nearest N.
-		return math.Floor(x + 0.5)
-	}
-	svg.Path(fmt.Sprintf("M%g %gV%gH%g", rnd(x), rnd(y), rnd(y+h), rnd(x+w)), "stroke:#888; fill:none; stroke-width:2") // TODO: Theme.
+	svg.Path(fmt.Sprintf("M%d %dV%dH%d", xi, yi, y2i, x2i), "stroke:#888; fill:none; stroke-width:2") // TODO: Theme.
 
 	// Render scale ticks.
 	for s := range e.scales["x"] {
-		renderScale(svg, 'x', s, e.xTicks.ticks[s], y+h)
+		renderScale(svg, 'x', s, e.xTicks.ticks[s], y2i)
 	}
 	for s := range e.scales["y"] {
-		renderScale(svg, 'y', s, e.yTicks.ticks[s], x)
+		renderScale(svg, 'y', s, e.yTicks.ticks[s], xi)
 	}
 }
 
 // TODO: Use shape-rendering: crispEdges?
 
-func renderBackground(svg *svg.SVG, x, y, w, h float64) {
-	r := func(x float64) int {
-		// Round to nearest N.
-		return int(math.Floor(x + 0.5))
-	}
-
-	svg.Rect(r(x), r(y), r(x+w)-r(x), r(y+h)-r(y), "fill:#eee") // TODO: Theme.
+func renderBackground(svg *svg.SVG, x, y, w, h int) {
+	svg.Rect(x, y, w, h, "fill:#eee") // TODO: Theme.
 }
 
-func renderGrid(svg *svg.SVG, dir rune, scale Scaler, ticks plotEltTicks, start, end float64) {
+func renderGrid(svg *svg.SVG, dir rune, scale Scaler, ticks plotEltTicks, start, end int) {
 	major := mapMany(scale, ticks.major).([]float64)
 
 	r := func(x float64) float64 {
@@ -292,34 +290,50 @@ func renderGrid(svg *svg.SVG, dir rune, scale Scaler, ticks plotEltTicks, start,
 	var path []string
 	for _, p := range major {
 		if dir == 'x' {
-			path = append(path, fmt.Sprintf("M%.6g %.6gv%.6g", r(p), r(start), r(end)-r(start)))
+			path = append(path, fmt.Sprintf("M%.6g %dv%d", r(p), start, end-start))
 		} else {
-			path = append(path, fmt.Sprintf("M%.6g %.6gh%.6g", r(start), r(p), r(end)-r(start)))
+			path = append(path, fmt.Sprintf("M%d %.6gh%d", start, r(p), end-start))
 		}
 	}
 
-	svg.Path(strings.Join(path, ""), "stroke: #fff; stroke-width:2") // TODO: Theme.
+	svg.Path(wrapPath(strings.Join(path, "")), "stroke: #fff; stroke-width:2") // TODO: Theme.
 }
 
-func renderScale(svg *svg.SVG, dir rune, scale Scaler, ticks plotEltTicks, pos float64) {
+func renderScale(svg *svg.SVG, dir rune, scale Scaler, ticks plotEltTicks, pos int) {
 	const length float64 = 4 // TODO: Theme
 
-	major := mapMany(scale, ticks.major).([]float64)
+	var path bytes.Buffer
+	have := map[float64]bool{}
+	for _, t := range []struct {
+		length float64
+		s      table.Slice
+	}{
+		{length * 2, ticks.major},
+		{length, ticks.minor},
+	} {
+		ticks := mapMany(scale, t.s).([]float64)
 
-	r := func(x float64) float64 {
-		// Round to nearest N.
-		return math.Floor(x + 0.5)
-	}
-	var path []string
-	for _, p := range major {
-		if dir == 'x' {
-			path = append(path, fmt.Sprintf("M%.6g %.6gv%.6g", r(p), r(pos), -length))
-		} else {
-			path = append(path, fmt.Sprintf("M%.6g %.6gh%.6g", r(pos), r(p), length))
+		r := func(x float64) float64 {
+			// Round to nearest N.
+			return math.Floor(x + 0.5)
 		}
-	}
+		for _, p := range ticks {
+			p = r(p)
+			if have[p] {
+				// Avoid overplotting the same tick
+				// marks.
+				continue
+			}
+			have[p] = true
+			if dir == 'x' {
+				fmt.Fprintf(&path, "M%.6g %dv%.6g", p, pos, -t.length)
+			} else {
+				fmt.Fprintf(&path, "M%d %.6gh%.6g", pos, p, t.length)
+			}
+		}
 
-	svg.Path(strings.Join(path, ""), "stroke:#888; stroke-width:2") // TODO: Theme
+	}
+	svg.Path(wrapPath(path.String()), "stroke:#888; stroke-width:2") // TODO: Theme
 }
 
 func (e *eltTicks) render(r *eltRender) {
@@ -431,4 +445,42 @@ func (env *renderEnv) Size() (w, h float64) {
 
 func round(x float64) int {
 	return int(math.Floor(x + 0.5))
+}
+
+// wrapPath wraps path data p to avoid exceeding SVG's recommended
+// line length limit of 255 characters.
+func wrapPath(p string) string {
+	const width = 70
+	if len(p) <= width {
+		return p
+	}
+	// Chop up p until we get below the width limit.
+	parts := make([]string, 0, 16)
+	for len(p) > width {
+		// Find the last command or space before exceeding width.
+		lastCmd, lastSpace := 0, 0
+		for i, ch := range p {
+			if i >= width && (lastCmd != 0 || lastSpace != 0) {
+				break
+			}
+			if 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' {
+				lastCmd = i
+			} else if ch == ' ' {
+				lastSpace = i
+			}
+		}
+		split := len(p)
+		// Prefer splitting at commands, but take spaces in
+		// case it's a huge command.
+		if lastCmd != 0 {
+			split = lastCmd
+		} else if lastSpace != 0 {
+			split = lastSpace
+		}
+		parts, p = append(parts, p[:split]), p[split:]
+	}
+	if len(p) > 0 {
+		parts = append(parts, p)
+	}
+	return strings.Join(parts, "\n")
 }

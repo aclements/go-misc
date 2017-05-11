@@ -9,6 +9,8 @@ import (
 	"image/color"
 	"math"
 	"reflect"
+	"strings"
+	"time"
 
 	"github.com/aclements/go-gg/generic"
 	"github.com/aclements/go-gg/generic/slice"
@@ -103,16 +105,47 @@ type Scaler interface {
 	// XXX If x is Unscaled, Map must only apply the ranger.
 	Map(x interface{}) interface{}
 
-	// XXX What should this return? moremath returns values in the
-	// input space, but that obviously doesn't work for discrete
-	// scales if I want the ticks between values. It could return
-	// values in the intermediate space or the output space.
+	// Ticks returns a set of "nice" major and minor tick marks
+	// spanning this Scaler's domain. The returned tick locations
+	// are values in this Scaler's domain type in increasing
+	// order. labels[i] gives the label of the major tick at
+	// major[i]. The minor ticks are a superset of the major
+	// ticks.
+	//
+	// max and pred constrain the ticks returned by Ticks. If
+	// possible, Ticks returns the largest set of ticks such that
+	// there are no more than max major ticks and the ticks
+	// satisfy pred. Both are hints, since for some scale types
+	// there's no clear way to reduce the number of ticks.
+	//
+	// pred should return true if the given set of ticks is
+	// acceptable. pred must be "monotonic" in the following
+	// sense: if pred is true for a given set of ticks, it must be
+	// true for any subset of those ticks and if pred is false for
+	// a given set of ticks, it must be false for any superset of
+	// those ticks. In other words, pred should return false if
+	// there are "too many" ticks or they are "too close
+	// together". If pred is nil, it is assumed to always be
+	// satisfied.
+	//
+	// If no tick marks can be produced (for example, there are no
+	// values in this Scaler's domain or the predicate cannot be
+	// satisfied), Ticks returns nil, nil, nil.
+	//
+	// TODO: Should this return ticks in the input space, the
+	// intermediate space, or the output space? moremath returns
+	// values in the input space. Input space values doesn't work
+	// for discrete scales if I want the ticks between values.
 	// Intermediate space works for continuous and discrete
-	// inputs, but not for discrete ranges (maybe that's okay).
-	// Output space is bad because I change the plot location in
-	// the course of layout. Currently it returns values in the
-	// input space or nil if ticks don't make sense.
-	Ticks(max int, pred func(major []float64, labels []string) bool) (major, minor table.Slice, labels []string)
+	// inputs, but not for discrete ranges (maybe that's okay) and
+	// it's awkward for a caller to do anything with an
+	// intermediate space value. Output space doesn't work with
+	// this API because I change the plot location in the course
+	// of layout without recomputing ticks. However, output space
+	// could work if Scaler exposed tick levels, since I could
+	// save the computed tick level across a re-layout and
+	// recompute the output space ticks from that.
+	Ticks(max int, pred func(major, minor table.Slice, labels []string) bool) (major, minor table.Slice, labels []string)
 
 	// SetFormatter sets the formatter for values on this scale.
 	//
@@ -134,14 +167,29 @@ type ContinuousScaler interface {
 	// TODO: There are two variations on min/max. 1) We can force
 	// the min/max, even if there's data beyond it. 2) We can say
 	// cap the scale to some min/max, but a smaller range is okay.
+	// Currently we can't express 2.
 
-	SetMin(v float64) ContinuousScaler
-	SetMax(v float64) ContinuousScaler
+	// SetMin and SetMax set the minimum and maximum values of
+	// this Scalar's domain and return the Scalar. If v is nil, it
+	// unsets the bound.
+	//
+	// v must be convertible to the Scaler's domain type. For
+	// example, if this is a linear scale, v can be of any
+	// numerical type. Unlike ExpandDomain, these do not set the
+	// Scaler's domain type.
+	SetMin(v interface{}) ContinuousScaler
+	SetMax(v interface{}) ContinuousScaler
 
-	// TODO: Should Include take an interface{} and work on any
-	// Scalar?
+	// TODO: Should Include work on any Scaler?
 
-	Include(v float64) ContinuousScaler
+	// Include requires that v be included in this Scaler's
+	// domain. Like SetMin/SetMax, this can expand Scaler's
+	// domain, but unlike SetMin/SetMax, this does not restrict
+	// it. If v is nil, it does nothing.
+	//
+	// v must be convertible to the Scaler's domain type. Unlike
+	// ExpandDomain, this does not set the Scaler's domain type.
+	Include(v interface{}) ContinuousScaler
 }
 
 // Unscaled represents a value that should not be scaled, but instead
@@ -252,7 +300,7 @@ func (s *defaultScale) Map(x interface{}) interface{} {
 	return s.ensure().Map(x)
 }
 
-func (s *defaultScale) Ticks(max int, pred func(major []float64, labels []string) bool) (major, minor table.Slice, labels []string) {
+func (s *defaultScale) Ticks(max int, pred func(major, minor table.Slice, labels []string) bool) (major, minor table.Slice, labels []string) {
 	return s.ensure().Ticks(max, pred)
 }
 
@@ -279,6 +327,9 @@ func DefaultScale(seq table.Slice) (Scaler, error) {
 
 	case []string:
 		// TODO: Ordinal scale
+
+	case []time.Time:
+		return NewTimeScaler(), nil
 	}
 
 	rt := reflect.TypeOf(seq).Elem()
@@ -353,7 +404,7 @@ func (s *identityScale) RangeType() reflect.Type {
 func (s *identityScale) Ranger(r Ranger) Ranger        { return nil }
 func (s *identityScale) Map(x interface{}) interface{} { return x }
 
-func (s *identityScale) Ticks(max int, pred func(major []float64, labels []string) bool) (major, minor table.Slice, labels []string) {
+func (s *identityScale) Ticks(max int, pred func(major, minor table.Slice, labels []string) bool) (major, minor table.Slice, labels []string) {
 	return nil, nil, nil
 }
 
@@ -372,33 +423,48 @@ func (s *identityScale) CloneScaler() Scaler {
 // Maybe a sub-interface for continuous Scalers?
 func NewLinearScaler() ContinuousScaler {
 	// TODO: Control over base.
-	return &linearScale{
-		s:       scale.Linear{Min: math.NaN(), Max: math.NaN()},
+	return &moremathScale{
+		min:     math.NaN(),
+		max:     math.NaN(),
 		dataMin: math.NaN(),
 		dataMax: math.NaN(),
 	}
 }
 
-type linearScale struct {
-	s scale.Linear
+func NewLogScaler(base int) ContinuousScaler {
+	return &moremathScale{
+		min:     math.NaN(),
+		max:     math.NaN(),
+		base:    base,
+		dataMin: math.NaN(),
+		dataMax: math.NaN(),
+	}
+}
+
+type moremathScale struct {
 	r Ranger
 	f interface{}
 
 	domainType       reflect.Type
+	base             int
+	min, max         float64
 	dataMin, dataMax float64
 }
 
-func (s *linearScale) String() string {
-	return fmt.Sprintf("linear [%g,%g] => %s", s.s.Min, s.s.Max, s.r)
+func (s *moremathScale) String() string {
+	if s.base > 0 {
+		return fmt.Sprintf("log [%d,%g,%g] => %s", s.base, s.min, s.max, s.r)
+	}
+	return fmt.Sprintf("linear [%g,%g] => %s", s.min, s.max, s.r)
 }
 
-func (s *linearScale) ExpandDomain(v table.Slice) {
+func (s *moremathScale) ExpandDomain(vs table.Slice) {
 	if s.domainType == nil {
-		s.domainType = reflect.TypeOf(v).Elem()
+		s.domainType = reflect.TypeOf(vs).Elem()
 	}
 
 	var data []float64
-	slice.Convert(&data, v)
+	slice.Convert(&data, vs)
 	min, max := s.dataMin, s.dataMax
 	for _, v := range data {
 		if math.IsNaN(v) || math.IsInf(v, 0) {
@@ -414,48 +480,77 @@ func (s *linearScale) ExpandDomain(v table.Slice) {
 	s.dataMin, s.dataMax = min, max
 }
 
-func (s *linearScale) SetMin(v float64) ContinuousScaler {
-	s.s.Min = v
+func (s *moremathScale) SetMin(v interface{}) ContinuousScaler {
+	if v == nil {
+		s.min = math.NaN()
+		return s
+	}
+	vfloat := reflect.ValueOf(v).Convert(float64Type).Float()
+	s.min = vfloat
 	return s
 }
 
-func (s *linearScale) SetMax(v float64) ContinuousScaler {
-	s.s.Max = v
+func (s *moremathScale) SetMax(v interface{}) ContinuousScaler {
+	if v == nil {
+		s.max = math.NaN()
+		return s
+	}
+	vfloat := reflect.ValueOf(v).Convert(float64Type).Float()
+	s.max = vfloat
 	return s
 }
 
-func (s *linearScale) Include(v float64) ContinuousScaler {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
+func (s *moremathScale) Include(v interface{}) ContinuousScaler {
+	if v == nil {
+		return s
+	}
+	vfloat := reflect.ValueOf(v).Convert(float64Type).Float()
+	if math.IsNaN(vfloat) || math.IsInf(vfloat, 0) {
 		return s
 	}
 	if math.IsNaN(s.dataMin) {
-		s.dataMin, s.dataMax = v, v
+		s.dataMin, s.dataMax = vfloat, vfloat
 	} else {
-		s.dataMin = math.Min(s.dataMin, v)
-		s.dataMax = math.Max(s.dataMax, v)
+		s.dataMin = math.Min(s.dataMin, vfloat)
+		s.dataMax = math.Max(s.dataMax, vfloat)
 	}
 	return s
 }
 
-func (s *linearScale) get() scale.Linear {
-	ls := s.s
-	if ls.Min > ls.Max {
-		ls.Min, ls.Max = ls.Max, ls.Min
-	}
-	if math.IsNaN(ls.Min) {
-		ls.Min = s.dataMin
-	}
-	if math.IsNaN(ls.Max) {
-		ls.Max = s.dataMax
-	}
-	if math.IsNaN(ls.Min) {
-		// Only possible if both dataMin and dataMax are NaN.
-		ls.Min, ls.Max = -1, 1
-	}
-	return ls
+type tickMapper interface {
+	scale.Ticker
+	Map(float64) float64
 }
 
-func (s *linearScale) Ranger(r Ranger) Ranger {
+func (s *moremathScale) get() tickMapper {
+	min, max := s.min, s.max
+	if min > max {
+		min, max = max, min
+	}
+	if math.IsNaN(min) {
+		min = s.dataMin
+	}
+	if math.IsNaN(max) {
+		max = s.dataMax
+	}
+	if math.IsNaN(min) {
+		// Only possible if both dataMin and dataMax are NaN.
+		min, max = -1, 1
+	}
+	if s.base > 0 {
+		ls, err := scale.NewLog(min, max, s.base)
+		if err != nil {
+			panic(err)
+		}
+		ls.SetClamp(true)
+		return &ls
+	}
+	return &scale.Linear{
+		Min: min, Max: max,
+	}
+}
+
+func (s *moremathScale) Ranger(r Ranger) Ranger {
 	old := s.r
 	if r != nil {
 		s.r = r
@@ -463,11 +558,11 @@ func (s *linearScale) Ranger(r Ranger) Ranger {
 	return old
 }
 
-func (s *linearScale) RangeType() reflect.Type {
+func (s *moremathScale) RangeType() reflect.Type {
 	return s.r.RangeType()
 }
 
-func (s *linearScale) Map(x interface{}) interface{} {
+func (s *moremathScale) Map(x interface{}) interface{} {
 	ls := s.get()
 	var scaled float64
 	switch x := x.(type) {
@@ -500,10 +595,16 @@ func (s *linearScale) Map(x interface{}) interface{} {
 	}
 }
 
-func (s *linearScale) Ticks(max int, pred func(major []float64, labels []string) bool) (major, minor table.Slice, labels []string) {
+func (s *moremathScale) Ticks(max int, pred func(major, minor table.Slice, labels []string) bool) (major, minor table.Slice, labels []string) {
 	type Stringer interface {
 		String() string
 	}
+	if s.domainType == nil {
+		// There are no values and no domain type, so we can't
+		// compute ticks or return slices of the domain type.
+		return nil, nil, nil
+	}
+
 	o := scale.TickOptions{Max: max}
 
 	// If the domain type is integral, don't let the tick level go
@@ -515,6 +616,14 @@ func (s *linearScale) Ticks(max int, pred func(major []float64, labels []string)
 		reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		o.MinLevel, o.MaxLevel = 0, 1000
+	default:
+		// Set bounds for the pred loop below.
+		o.MinLevel, o.MaxLevel = -1000, 1000
+	}
+	ls := s.get()
+	level, ok := o.FindLevel(ls, 0)
+	if !ok {
+		return nil, nil, nil
 	}
 
 	mkLabels := func(major []float64) []string {
@@ -558,22 +667,339 @@ func (s *linearScale) Ticks(max int, pred func(major []float64, labels []string)
 		}
 		return labels
 	}
-	if pred != nil {
-		o.Pred = func(ticks []float64, level int) bool {
-			return pred(ticks, mkLabels(ticks))
+	// Adjust level to satisfy pred.
+	for ; level <= o.MaxLevel; level++ {
+		majorx := ls.TicksAtLevel(level)
+		minorx := ls.TicksAtLevel(level - 1)
+		labels := mkLabels(majorx.([]float64))
+
+		// Convert to domain type.
+		majorv := reflect.New(reflect.SliceOf(s.domainType))
+		minorv := reflect.New(reflect.SliceOf(s.domainType))
+		slice.Convert(majorv.Interface(), majorx)
+		slice.Convert(minorv.Interface(), minorx)
+		major, minor = majorv.Elem().Interface(), minorv.Elem().Interface()
+
+		if pred == nil || pred(major, minor, labels) {
+			return major, minor, labels
 		}
 	}
-
-	ls := s.get()
-	majorx, minorx := ls.Ticks(o)
-	return majorx, minorx, mkLabels(majorx)
+	Warning.Printf("%s: unable to compute satisfactory ticks, axis will be empty", s)
+	return nil, nil, nil
 }
 
-func (s *linearScale) SetFormatter(f interface{}) {
+func (s *moremathScale) SetFormatter(f interface{}) {
 	s.f = f
 }
 
-func (s *linearScale) CloneScaler() Scaler {
+func (s *moremathScale) CloneScaler() Scaler {
+	s2 := *s
+	return &s2
+}
+
+// NewTimeScaler returns a continuous linear scale. The domain must
+// be time.Time.
+func NewTimeScaler() *timeScale {
+	return &timeScale{}
+}
+
+type timeScale struct {
+	r                Ranger
+	f                func(time.Time) string
+	min, max         time.Time
+	dataMin, dataMax time.Time
+}
+
+func (s *timeScale) String() string {
+	return fmt.Sprintf("time [%g,%g] => %s", s.min, s.max, s.r)
+}
+
+func (s *timeScale) ExpandDomain(vs table.Slice) {
+	var data []time.Time
+	slice.Convert(&data, vs)
+	min, max := s.dataMin, s.dataMax
+	for _, v := range data {
+		if v.Before(min) || min.IsZero() {
+			min = v
+		}
+		if v.After(max) || max.IsZero() {
+			max = v
+		}
+	}
+	s.dataMin, s.dataMax = min, max
+}
+
+func (s *timeScale) SetMin(v interface{}) ContinuousScaler {
+	s.min = v.(time.Time)
+	return s
+}
+
+func (s *timeScale) SetMax(v interface{}) ContinuousScaler {
+	s.max = v.(time.Time)
+	return s
+}
+
+func (s *timeScale) Include(v interface{}) ContinuousScaler {
+	tv := v.(time.Time)
+	if s.dataMin.IsZero() {
+		s.dataMin, s.dataMax = tv, tv
+	} else {
+		if tv.Before(s.dataMin) {
+			s.dataMin = tv
+		}
+		if tv.After(s.dataMax) {
+			s.dataMax = tv
+		}
+	}
+	return s
+}
+
+func (s *timeScale) Ranger(r Ranger) Ranger {
+	old := s.r
+	if r != nil {
+		s.r = r
+	}
+	return old
+}
+
+func (s *timeScale) RangeType() reflect.Type {
+	return s.r.RangeType()
+}
+
+func (s *timeScale) getMinMax() (time.Time, time.Time) {
+	min := s.min
+	if min.IsZero() {
+		min = s.dataMin
+	}
+	max := s.max
+	if max.IsZero() {
+		max = s.dataMax
+	}
+	return min, max
+}
+
+func (s *timeScale) Map(x interface{}) interface{} {
+	min, max := s.getMinMax()
+	t := x.(time.Time)
+	var scaled float64 = float64(t.Sub(min)) / float64(max.Sub(min))
+
+	switch r := s.r.(type) {
+	case ContinuousRanger:
+		return r.Map(scaled)
+
+	case DiscreteRanger:
+		_, levels := r.Levels()
+		// Bin the scaled value into 'levels' bins.
+		level := int(scaled * float64(levels))
+		if level < 0 {
+			level = 0
+		} else if level >= levels {
+			level = levels - 1
+		}
+		return r.MapLevel(level, levels)
+
+	default:
+		panic("Ranger must be a ContinuousRanger or DiscreteRanger")
+	}
+}
+
+type durationTicks time.Duration
+
+func (d durationTicks) Next(t time.Time) time.Time {
+	if d == 0 {
+		panic("invalid zero duration")
+	}
+	return t.Add(time.Duration(d)).Truncate(time.Duration(d))
+}
+
+var timeTickerLevels = []struct {
+	min  time.Duration
+	next func(t time.Time) time.Time
+}{
+	{time.Minute, durationTicks(time.Minute).Next},
+	{10 * time.Minute, durationTicks(10 * time.Minute).Next},
+	{time.Hour, func(t time.Time) time.Time {
+		year, month, day := t.Date()
+		// N.B. This will skip an hour at some DST transitions.
+		return time.Date(year, month, day, t.Hour()+1, 0, 0, 0, t.Location())
+	}},
+	{6 * time.Hour, func(t time.Time) time.Time {
+		year, month, day := t.Date()
+		// N.B. This will skip an hour if the DST transition
+		// happens at a multiple of 6 hours.
+		return time.Date(year, month, day, ((t.Hour()+6)/6)*6, 0, 0, 0, t.Location())
+	}},
+	{24 * time.Hour, func(t time.Time) time.Time {
+		year, month, day := t.Date()
+		return time.Date(year, month, day+1, 0, 0, 0, 0, t.Location())
+	}},
+	{7 * 24 * time.Hour, func(t time.Time) time.Time {
+		year, month, day := t.Date()
+		loc := t.Location()
+		_, week1 := t.ISOWeek()
+		for {
+			day++
+			t = time.Date(year, month, day, 0, 0, 0, 0, loc)
+			if _, week2 := t.ISOWeek(); week1 != week2 {
+				return t
+			}
+		}
+	}},
+	{30 * 24 * time.Hour, func(t time.Time) time.Time {
+		year, month, _ := t.Date()
+		return time.Date(year, month+1, 1, 0, 0, 0, 0, t.Location())
+	}},
+	{365 * 24 * time.Hour, func(t time.Time) time.Time {
+		return time.Date(t.Year()+1, time.January, 1, 0, 0, 0, 0, t.Location())
+	}},
+}
+
+// timeTicker calculates the ticks between min and max. levels >= 0
+// refer to entries in timeTickerLevels. levels < 0 start with -1 at
+// every 10 seconds and then alternate dividing by 2 and 5. So level
+// -3 is 1s, -9 is 1ms, -12 is 1us, etc.
+// https://play.golang.org/p/xUv4P25Wxi will print the level step
+// sizes.
+type timeTicker struct {
+	min, max time.Time
+}
+
+func (t *timeTicker) getNextTick(level int) func(time.Time) time.Time {
+	if level >= 0 {
+		if level >= len(timeTickerLevels) {
+			// TODO: larger ticks should do multiples of
+			// the year, like the linear scale does.
+			panic(fmt.Sprintf("invalid level %d", level))
+		}
+		return timeTickerLevels[level].next
+	} else {
+		exp, double := level/2+1, (level%2 == 0)
+		step := math.Pow10(exp) * 1e9
+		if double {
+			step = step * 5
+		}
+		return durationTicks(time.Duration(step)).Next
+	}
+}
+
+func (t *timeTicker) CountTicks(level int) int {
+	next := t.getNextTick(level)
+	var i int
+	// N.B. We cut off at 1e5 ticks. If your plot is larger than
+	// that, you're on your own.
+	for x := next(t.min.Add(-1)); !x.After(t.max) && i < 1e5; x = next(x) {
+		i++
+	}
+	return i
+}
+
+func (t *timeTicker) TicksAtLevel(level int) interface{} {
+	var ticks []time.Time
+	next := t.getNextTick(level)
+	for x := next(t.min.Add(-1)); !x.After(t.max); x = next(x) {
+		ticks = append(ticks, x)
+	}
+	return ticks
+}
+
+func (t *timeTicker) GuessLevel() int {
+	dur := t.max.Sub(t.min)
+	for i := len(timeTickerLevels) - 1; i >= 0; i-- {
+		if dur > timeTickerLevels[i].min {
+			return i
+		}
+	}
+	return int(2 * (math.Log10(float64(dur)/1e9) - 2))
+}
+
+func (timeTicker) MaxLevel() int {
+	return len(timeTickerLevels) - 1
+}
+
+func (timeTicker) Label(cur, prev time.Time, level int) string {
+	dateFmt := "2006"
+	switch {
+	case level < 6:
+		dateFmt = "2006/1/2"
+		if !prev.IsZero() {
+			if prev.Year() == cur.Year() {
+				dateFmt = "Jan 2"
+				_, prevweek := prev.ISOWeek()
+				_, curweek := cur.ISOWeek()
+				if prevweek == curweek {
+					dateFmt = "Mon"
+					if prev.YearDay() == cur.YearDay() {
+						dateFmt = ""
+					}
+				}
+			}
+		}
+	case level < 7:
+		dateFmt = "2006/1"
+		if !prev.IsZero() && prev.Year() == cur.Year() {
+			dateFmt = "Jan"
+		}
+	}
+	timeFmt := ""
+	switch {
+	case level < -3: // < 1s
+		digits := (-level - 2) / 2
+		timeFmt = "15:04:05." + strings.Repeat("0", digits)
+	case level < 0: // < 1m
+		timeFmt = "15:04:05"
+	case level < 4: // < 1d
+		timeFmt = "15:04"
+	}
+	return cur.Format(strings.TrimSpace(dateFmt + " " + timeFmt))
+}
+
+func (s *timeScale) Ticks(maxTicks int, pred func(major, minor table.Slice, labels []string) bool) (table.Slice, table.Slice, []string) {
+	min, max := s.getMinMax()
+	ticker := &timeTicker{min, max}
+	o := scale.TickOptions{Max: maxTicks, MinLevel: -21, MaxLevel: ticker.MaxLevel()}
+	level, ok := o.FindLevel(ticker, ticker.GuessLevel())
+	if !ok {
+		// TODO(quentin): Better handling of too-large time range.
+		return nil, nil, nil
+	}
+	mkLabels := func(major []time.Time) []string {
+		// TODO(quentin): Pick a format based on which parts
+		// of the time have changed and are non-zero.
+		labels := make([]string, len(major))
+		if s.f != nil {
+			// Use custom formatter.
+			for i, x := range major {
+				labels[i] = s.f(x)
+			}
+			return labels
+		}
+		var prev time.Time
+		for i, t := range major {
+			labels[i] = ticker.Label(t, prev, level)
+			prev = t
+		}
+		return labels
+	}
+	var majors, minors []time.Time
+	var labels []string
+	for ; level <= o.MaxLevel; level++ {
+		majors = ticker.TicksAtLevel(level).([]time.Time)
+		if level > o.MinLevel {
+			minors = ticker.TicksAtLevel(level - 1).([]time.Time)
+		}
+		labels = mkLabels(majors)
+		if pred == nil || pred(majors, minors, labels) {
+			break
+		}
+	}
+	return majors, minors, labels
+}
+
+func (s *timeScale) SetFormatter(f interface{}) {
+	s.f = f.(func(time.Time) string)
+}
+
+func (s *timeScale) CloneScaler() Scaler {
 	s2 := *s
 	return &s2
 }
@@ -667,7 +1093,7 @@ func (s *ordinalScale) Map(x interface{}) interface{} {
 	}
 }
 
-func (s *ordinalScale) Ticks(max int, pred func(major []float64, labels []string) bool) (major, minor table.Slice, labels []string) {
+func (s *ordinalScale) Ticks(max int, pred func(major, minor table.Slice, labels []string) bool) (major, minor table.Slice, labels []string) {
 	// TODO: Return *no* ticks and only labels. Can't currently
 	// express this.
 
@@ -842,6 +1268,9 @@ func (r *defaultColorRanger) MapLevel(i, j int) interface{} {
 func mapMany(scaler Scaler, seq table.Slice) table.Slice {
 	sv := reflect.ValueOf(seq)
 	rt := reflect.SliceOf(scaler.RangeType())
+	if seq == nil {
+		return reflect.MakeSlice(rt, 0, 0).Interface()
+	}
 	res := reflect.MakeSlice(rt, sv.Len(), sv.Len())
 	for i, len := 0, sv.Len(); i < len; i++ {
 		val := scaler.Map(sv.Index(i).Interface())

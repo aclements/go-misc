@@ -42,25 +42,20 @@ type ECDF struct {
 	// should be a plural noun.
 	Label string
 
-	// Widen adjusts the domain of the returned ECDF. If Widen is
-	// not 1.0, ECDF will add a point below the smallest sample
-	// and above the largest sample to make the 0 and 1 levels
-	// clear. If Widen is 0, it is treated as 1.1 (that is, widen
-	// the domain by 10%, or 5% on the left and 5% on the right).
-	//
-	// TODO: Have a way to specify a specific range?
-	Widen float64
-
-	// SplitGroups indicates that each group in the table should
-	// have separate bounds based on the data in that group alone.
-	// The default, false, indicates that the bounds should be
-	// based on all of the data in the table combined. This makes
-	// it possible to stack ECDFs and easier to compare them
-	// across groups.
-	SplitGroups bool
+	// Domain specifies the domain of the returned ECDF. If the
+	// domain is wider than the bounds of the data in a group,
+	// ECDF will add a point below the smallest sample and above
+	// the largest sample to make the 0 and 1 levels clear. If
+	// Domain is nil, it defaults to DomainData{}.
+	Domain FunctionDomainer
 }
 
 func (s ECDF) F(g table.Grouping) table.Grouping {
+	// Set defaults.
+	if s.Domain == nil {
+		s.Domain = DomainData{}
+	}
+
 	// Construct output column names.
 	dname, cname := "cumulative density", "cumulative count"
 	if s.Label != "" {
@@ -71,30 +66,31 @@ func (s ECDF) F(g table.Grouping) table.Grouping {
 	}
 
 	g = table.SortBy(g, s.X)
-	if s.Widen <= 1.0 && s.Widen != 0 {
-		// Disallow narrowing, since this isn't a continuous
-		// function.
-		s.Widen = 1.0
-	}
-	col := getCol(g, s.X, s.Widen, s.SplitGroups)
+	domain := s.Domain.FunctionDomain(g, s.X)
+
 	return table.MapTables(g, func(gid table.GroupID, t *table.Table) *table.Table {
 		// Get input columns.
-		var ws []float64
-		xs := col[gid].data
+		var xs, ws []float64
+		slice.Convert(&xs, t.MustColumn(s.X))
 		if s.W != "" {
 			slice.Convert(&ws, t.MustColumn(s.W))
 		}
 
 		// Ignore empty tables.
 		if len(xs) == 0 {
-			return new(table.Builder).Add(s.X, []float64{}).Add(cname, []float64{}).Add(dname, []float64{}).Done()
+			nt := new(table.Builder).Add(s.X, []float64{}).Add(cname, []float64{}).Add(dname, []float64{})
+			preserveConsts(nt, t)
+			return nt.Done()
 		}
+
+		// Get domain.
+		min, max := domain(gid)
 
 		// Create output columns.
 		xo, do, co := make([]float64, 0), make([]float64, 0), make([]float64, 0)
-		if s.Widen != 1.0 {
+		if min < xs[0] {
 			// Extend to the left.
-			xo = append(xo, col[gid].min)
+			xo = append(xo, min)
 			do = append(do, 0)
 			co = append(co, 0)
 		}
@@ -127,9 +123,9 @@ func (s ECDF) F(g table.Grouping) table.Grouping {
 			i = j
 		}
 
-		if s.Widen != 1.0 {
+		if xs[len(xs)-1] < max {
 			// Extend to the right.
-			xo = append(xo, col[gid].max)
+			xo = append(xo, max)
 			do = append(do, 1)
 			co = append(co, cum)
 		}

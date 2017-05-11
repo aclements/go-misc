@@ -21,7 +21,7 @@ func measureString(pxSize float64, s string) textMetrics {
 	// Chrome's default font-size is 16px, so 20px is a reasonable
 	// leading.
 	return textMetrics{
-		width:   0.75 * pxSize * float64(len(s)),
+		width:   0.5 * pxSize * float64(len(s)),
 		leading: 1.25 * pxSize,
 	}
 }

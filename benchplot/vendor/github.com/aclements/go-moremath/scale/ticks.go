@@ -20,37 +20,40 @@ type TickOptions struct {
 	// levels to accept, respectively. If they are both 0, there is
 	// no limit on acceptable tick levels.
 	MinLevel, MaxLevel int
+}
 
-	// Pred returns true if ticks is an acceptable set of major
-	// ticks. ticks will be in increasing order. Pred must be
-	// "monotonic" in level in the following sense: if Pred is
-	// false for level l (or ticks t), it must be false for all l'
-	// < l (or len(t') > len(t)), and if Pred is true for level l
-	// (or ticks t), it must be true for all l' > l (or len(t') <
-	// len(t)). In other words, Pred should return false if there
-	// are "too many" ticks or they are "too close together".
-	//
-	// If Pred is nil, it is assumed to always be satisfied.
-	Pred func(ticks []float64, level int) bool
+// A Ticker computes tick marks for a scale. The "level" of the ticks
+// controls how many ticks there are and how closely they are spaced.
+// Higher levels have fewer ticks, while lower levels have more ticks.
+// For example, on a numerical scale, one could have ticks at every
+// n*(10^level).
+type Ticker interface {
+	// CountTicks returns the number of ticks at level in this
+	// scale's input range. This is equivalent to
+	// len(TicksAtLevel(level)), but should be much more
+	// efficient. CountTicks is a weakly monotonically decreasing
+	// function of level.
+	CountTicks(level int) int
+
+	// TicksAtLevel returns a slice of "nice" tick values in
+	// increasing order at level in this scale's input range.
+	// Typically, TicksAtLevel(l+1) is a subset of
+	// TicksAtLevel(l). That is, higher levels remove ticks from
+	// lower levels.
+	TicksAtLevel(level int) interface{}
 }
 
 // FindLevel returns the lowest level that satisfies the constraints
 // given by o:
 //
-// * count(level) <= o.Max
+// * ticker.CountTicks(level) <= o.Max
 //
 // * o.MinLevel <= level <= o.MaxLevel (if MinLevel and MaxLevel != 0).
 //
-// * o.Pred(ticks(level), level) is true (if o.Pred != nil).
-//
 // If the constraints cannot be satisfied, it returns 0, false.
 //
-// ticks(level) must return the tick marks at level in increasing
-// order. count(level) must return len(ticks(level)), but should do so
-// without constructing the ticks array because it may be very large.
-// count must be a weakly monotonically decreasing function of level.
 // guess is the level to start the optimization at.
-func (o *TickOptions) FindLevel(count func(level int) int, ticks func(level int) []float64, guess int) (int, bool) {
+func (o *TickOptions) FindLevel(ticker Ticker, guess int) (int, bool) {
 	minLevel, maxLevel := o.MinLevel, o.MaxLevel
 	if minLevel == 0 && maxLevel == 0 {
 		minLevel, maxLevel = -1000, 1000
@@ -70,12 +73,12 @@ func (o *TickOptions) FindLevel(count func(level int) int, ticks func(level int)
 	}
 
 	// Optimize count against o.Max.
-	if count(l) <= o.Max {
+	if ticker.CountTicks(l) <= o.Max {
 		// We're satisfying the o.Max and min/maxLevel
 		// constraints. count is monotonically decreasing, so
 		// decrease level to increase the count until we
 		// violate either o.Max or minLevel.
-		for l--; l >= minLevel && count(l) <= o.Max; l-- {
+		for l--; l >= minLevel && ticker.CountTicks(l) <= o.Max; l-- {
 		}
 		// We went one too far.
 		l++
@@ -83,7 +86,7 @@ func (o *TickOptions) FindLevel(count func(level int) int, ticks func(level int)
 		// We're over o.Max. Increase level to decrease the
 		// count until we go below o.Max. This may cause us to
 		// violate maxLevel.
-		for l++; l <= maxLevel && count(l) > o.Max; l++ {
+		for l++; l <= maxLevel && ticker.CountTicks(l) > o.Max; l++ {
 		}
 		if l > maxLevel {
 			// We can't satisfy both o.Max and maxLevel.
@@ -93,19 +96,6 @@ func (o *TickOptions) FindLevel(count func(level int) int, ticks func(level int)
 
 	// At this point l is the lowest value that satisfies the
 	// o.Max, minLevel, and maxLevel constraints.
-
-	// Optimize ticks against o.Pred.
-	if o.Pred != nil {
-		// Increase level until Pred is satisfied. This may
-		// cause us to violate maxLevel.
-		for l <= maxLevel && !o.Pred(ticks(l), l) {
-			l++
-		}
-		if l > maxLevel {
-			// We can't satisfy both maxLevel and Pred.
-			return 0, false
-		}
-	}
 
 	return l, true
 }

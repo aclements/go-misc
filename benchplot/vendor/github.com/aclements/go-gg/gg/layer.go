@@ -145,6 +145,40 @@ func (l LayerPaths) apply(p *Plot, sort bool) {
 	}, p.Data().Tables()})
 }
 
+// LayerArea shades the area between two columns with a polygon. It is
+// useful in conjunction with ggstat.AggMax and ggstat.AggMin for
+// drawing the extents of data.
+type LayerArea struct {
+	// X names the column that defines the input of each point. If
+	// this is empty, it defaults to the first column.
+	X string
+
+	// Upper and Lower name columns that define the vertical
+	// bounds of the shaded area. If either is "", it defaults to
+	// 0.
+	Upper, Lower string
+
+	// Fill names a column that defines the fill color of each
+	// path. If Fill is "", it defaults to none. Otherwise, the
+	// data is grouped by Fill.
+	Fill string
+}
+
+func (l LayerArea) Apply(p *Plot) {
+	defaultCols(p, &l.X)
+	if l.Fill != "" {
+		p.GroupBy(l.Fill)
+	}
+	defer p.Save().Restore()
+	p = p.SortBy(l.X)
+	p.marks = append(p.marks, plotMark{&markArea{
+		p.use("x", l.X),
+		p.use("y", l.Upper),
+		p.use("y", l.Lower),
+		p.use("fill", l.Fill),
+	}, p.Data().Tables()})
+}
+
 // LayerPoints layers a point mark at each data point.
 type LayerPoints struct {
 	// X and Y name columns that define input and response of each
@@ -289,9 +323,11 @@ func (l LayerTooltips) Apply(p *Plot) {
 
 	// Split up by subplot and flatten each subplot.
 	tables := map[*subplot][]*table.Table{}
+	gids := map[*subplot]table.GroupID{}
 	for _, gid := range p.Data().Tables() {
 		s := subplotOf(gid)
 		tables[s] = append(tables[s], p.Data().Table(gid))
+		gids[s] = gid
 	}
 	var ng table.GroupingBuilder
 	for k, ts := range tables {
@@ -299,7 +335,9 @@ func (l LayerTooltips) Apply(p *Plot) {
 		for i, t := range ts {
 			subg.Add(table.RootGroupID.Extend(i), t)
 		}
-		ng.Add(table.RootGroupID.Extend(k), table.Flatten(subg.Done()))
+		ngid := table.RootGroupID.Extend(k)
+		ng.Add(ngid, table.Flatten(subg.Done()))
+		p.copyScales(gids[k], ngid)
 	}
 	p.SetData(ng.Done())
 

@@ -37,10 +37,17 @@ type Normalize struct {
 	By interface{}
 
 	// Cols is a slice of the names of columns to normalize
-	// relative to their value in the denominator row. Cols may be
-	// nil, in which case it defaults to all integral and floating
-	// point columns.
+	// relative to the corresponding DenomCols value in the
+	// denominator row. Cols may be nil, in which case it defaults
+	// to all integral and floating point columns.
 	Cols []string
+
+	// DenomCols is a slice of the names of columns used as the
+	// demoninator. DenomCols may be nil, in which case it
+	// defaults to Cols (i.e. each column will be normalized to
+	// the value from that column in the denominator row.)
+	// Otherwise, DenomCols must be the same length as Cols.
+	DenomCols []string
 }
 
 func (s Normalize) F(g table.Grouping) table.Grouping {
@@ -97,8 +104,13 @@ func (s Normalize) F(g table.Grouping) table.Grouping {
 
 		// Normalize columns.
 		newt := table.NewBuilder(t)
+		denomCols := s.DenomCols
+		if denomCols == nil {
+			denomCols = s.Cols
+		}
 		for coli, col := range s.Cols {
-			out := normalizeTo(t.MustColumn(col), drow)
+			denom := denomValue(t.MustColumn(denomCols[coli]), drow)
+			out := normalizeTo(t.MustColumn(col), denom)
 			newt.Add(newcols[coli], out)
 		}
 
@@ -134,10 +146,17 @@ func canNormalize(k reflect.Kind) bool {
 	return canNormalizeKinds[k]
 }
 
-func normalizeTo(s interface{}, index int) interface{} {
+func denomValue(s interface{}, index int) float64 {
 	switch s := s.(type) {
 	case []float64:
-		denom := s[index]
+		return s[index]
+	}
+	return reflect.ValueOf(s).Index(index).Convert(float64Type).Float()
+}
+
+func normalizeTo(s interface{}, denom float64) interface{} {
+	switch s := s.(type) {
+	case []float64:
 		out := make([]float64, len(s))
 		for i, numer := range s {
 			out[i] = numer / denom
@@ -146,7 +165,6 @@ func normalizeTo(s interface{}, index int) interface{} {
 	}
 
 	sv := reflect.ValueOf(s)
-	denom := sv.Index(index).Convert(float64Type).Float()
 
 	out := reflect.MakeSlice(float64SliceType, sv.Len(), sv.Len())
 	for i, len := 0, sv.Len(); i < len; i++ {

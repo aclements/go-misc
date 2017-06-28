@@ -45,6 +45,8 @@ type thread struct {
 	index   int // Index in Scheduler.runnable or .blocked
 	blocked bool
 
+	tls map[*TLS]interface{}
+
 	wake chan void // Send void{} to wake this thread
 }
 
@@ -55,7 +57,7 @@ func (t *thread) String() string {
 const debug = false
 
 func (s *Scheduler) newThread() *thread {
-	thr := &thread{s, s.nextid, -1, false, make(chan void)}
+	thr := &thread{s, s.nextid, -1, false, nil, make(chan void)}
 	s.nextid++
 	if thr.id != -1 {
 		thr.index = len(s.runnable)

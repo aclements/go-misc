@@ -76,8 +76,8 @@ func (s *Scheduler) Run(main func()) {
 	s.as.Run(func() {
 		// Initialize state.
 		s.nextid = 0
-		s.runnable = nil
-		s.blocked = nil
+		s.runnable = s.runnable[:0]
+		s.blocked = s.blocked[:0]
 		s.curThread = nil
 		s.goErr = nil
 		s.wakeSched = make(chan void)

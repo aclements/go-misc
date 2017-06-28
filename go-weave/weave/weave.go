@@ -49,7 +49,7 @@ type thread struct {
 }
 
 func (t *thread) String() string {
-	return fmt.Sprintf("t%d", t.id)
+	return fmt.Sprintf("T%d", t.id)
 }
 
 const debug = false
@@ -77,6 +77,7 @@ func (s *Scheduler) Run(main func()) {
 		// Initialize state.
 		s.nextid = 0
 		s.runnable = nil
+		s.blocked = nil
 		s.curThread = nil
 		s.goErr = nil
 		s.wakeSched = make(chan void)
@@ -85,6 +86,9 @@ func (s *Scheduler) Run(main func()) {
 		s.scheduler()
 		if s.goErr != nil {
 			panic(errorWithTrace{s.goErr, s.trace})
+		}
+		if len(s.blocked) != 0 {
+			panic(errorWithTrace{fmt.Sprintf("threads asleep: %s", s.blocked), s.trace})
 		}
 		if debug {
 			fmt.Println("run done")

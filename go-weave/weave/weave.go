@@ -11,8 +11,10 @@ import (
 	"github.com/aclements/go-misc/go-weave/amb"
 )
 
-// TODO: Implement simple partial order reduction. Group all pending
-// read operations and schedule them as a single unit.
+// TODO: Implement simple partial order reduction. If the next actions
+// on T1 and T2 commute, then we know that [T1,T2,...] and [T2,T1,...]
+// are equivalent (however, we can't just cut off T2, since we still
+// need [T2,T2,...]).
 
 // TODO: Implement a PCT scheduler (https://www.microsoft.com/en-us/research/publication/a-randomized-scheduler-with-probabilistic-guarantees-of-finding-bugs/)
 

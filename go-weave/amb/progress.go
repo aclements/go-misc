@@ -54,20 +54,24 @@ func startProgress() {
 		go pipeFeeder(newStdoutR, origStdout, origStdout)
 		go pipeFeeder(newStderrR, origStderr, origStderr)
 
-		report := func() {
+		report := func(final bool) {
 			progress.printLock.Lock()
 			fmt.Fprintf(origStderr, "%s%d done", resetLine, atomic.LoadInt64(&count))
+			if final {
+				fmt.Fprintf(origStderr, "\n")
+			}
 			progress.printLock.Unlock()
 		}
 		ticker := time.NewTicker(100 * time.Millisecond)
+	loop:
 		for {
-			report()
+			report(false)
 
 			select {
 			case <-ticker.C:
 			case <-progress.stop:
-				report()
-				break
+				report(true)
+				break loop
 			}
 		}
 		ticker.Stop()

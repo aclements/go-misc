@@ -7,6 +7,8 @@ package amb
 import (
 	"errors"
 	"fmt"
+	"os"
+	"runtime"
 )
 
 // A Strategy describes how to explore a space of ambiguous values.
@@ -87,6 +89,15 @@ func (s *Scheduler) run1(root func()) {
 		if err != nil {
 			// TODO: Report path.
 			fmt.Println("failure:", err)
+			var buf []byte
+			for i := 1 << 10; i < 1<<20; i *= 2 {
+				buf = make([]byte, i)
+				buf = buf[:runtime.Stack(buf, false)]
+				if len(buf) < i {
+					break
+				}
+			}
+			os.Stdout.Write(buf)
 		}
 	}()
 	root()

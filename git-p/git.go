@@ -123,6 +123,29 @@ func gitCommitMessage(commit string) (string, error) {
 	return "", nil
 }
 
+var gerritFields = map[string]bool{"Reviewed-on": true, "Run-TryBot": true, "TryBot-Result": true, "Reviewed-by": true}
+
+// canonGerritMessage strips Gerrit-added fields from a commit message.
+func canonGerritMessage(msg string) string {
+	msg = strings.TrimRight(msg, "\n")
+	for {
+		// Consume fields from the end of the message.
+		i := strings.LastIndex(msg, "\n")
+		if i < 0 {
+			break
+		}
+		sep := i + strings.Index(msg[i:], ": ")
+		if sep < i {
+			break
+		}
+		if !gerritFields[msg[i+1:sep]] {
+			break
+		}
+		msg = msg[:i]
+	}
+	return msg + "\n"
+}
+
 // changeIds returns the full Gerrit change IDs of each commit. The
 // change ID will be "" if missing.
 func changeIds(project, forBranch string, commits []string) []string {

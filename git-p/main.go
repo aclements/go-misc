@@ -268,7 +268,7 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 		} else {
 			msg1, err1 := gitCommitMessage(info.CurrentRevision)
 			msg2, err2 := gitCommitMessage(commit)
-			if !(err1 == nil && err2 == nil && msg1 == msg2) {
+			if !(err1 == nil && err2 == nil && canonGerritMessage(msg1) == canonGerritMessage(msg2)) {
 				// Patches are the same, but the
 				// commit message has changed.
 				warnings = append(warnings, "Local commit message differs")

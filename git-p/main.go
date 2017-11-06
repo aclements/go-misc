@@ -333,7 +333,10 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 		configs := []string{}
 		for _, msg := range info.Messages {
 			// Requires DETAILED_ACCOUNTS option.
-			if msg.PatchSet != curPatchSet || msg.Author.Email != "gobot@golang.org" {
+			if msg.PatchSet != curPatchSet {
+				continue
+			}
+			if msg.Author == nil || msg.Author.Email != "gobot@golang.org" {
 				continue
 			}
 			for _, f := range trybotFailures.FindAllStringSubmatch(msg.Message, -1) {

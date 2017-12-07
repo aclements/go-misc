@@ -64,6 +64,9 @@
 //     done
 package main
 
+// TODO: Should untagged saved commits be treated like a cache and
+// deleted automatically?
+
 import (
 	"bytes"
 	"crypto/sha1"
@@ -151,7 +154,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  %s [flags] with <name> <command>... - run <command> using build <name>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] env <name> - print the environment for build <name> as shell code\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s [flags] list - list saved builds\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s [flags] gc - clean the deduplication cache", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s [flags] gc [-rm-unlabeled] - clean the deduplication cache", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\n\n")
 		fmt.Fprintf(os.Stderr, "<name> may be an unambiguous commit hash or a string name.\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
@@ -260,7 +263,9 @@ func main() {
 		doEnv(flag.Arg(1))
 
 	case "gc":
-		if flag.NArg() > 1 {
+		if flag.NArg() == 2 && flag.Arg(1) == "-rm-unlabeled" {
+			doRemoveUnlabeled()
+		} else if flag.NArg() > 1 {
 			flag.Usage()
 			os.Exit(2)
 		}
@@ -460,6 +465,27 @@ func getEnv(savePath string) (goroot, path string) {
 	}
 
 	return savePath, strings.Join(p, string(filepath.ListSeparator))
+}
+
+func doRemoveUnlabeled() {
+	builds, err := listBuilds(listNames)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	rms := 0
+	for _, build := range builds {
+		if len(build.names) != 0 {
+			continue
+		}
+		if err := os.RemoveAll(build.path); err != nil {
+			// Not fatal.
+			log.Println(err)
+		} else {
+			rms++
+		}
+	}
+	fmt.Printf("removed %d unlabeled saved build(s)\n", rms)
 }
 
 var goodDedupPath = regexp.MustCompile("/[0-9a-f]{2}/[0-9a-f]{38}$")

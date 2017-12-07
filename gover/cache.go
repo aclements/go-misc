@@ -66,6 +66,7 @@ func resolveName(name string) (path string, ok bool) {
 }
 
 type buildInfo struct {
+	path       string
 	commitHash string
 	deltaHash  string
 	names      []string
@@ -113,7 +114,7 @@ func listBuilds(flags listFlags) ([]*buildInfo, error) {
 			continue
 		}
 		nameParts := strings.SplitN(file.Name(), "+", 2)
-		info := &buildInfo{commitHash: nameParts[0]}
+		info := &buildInfo{path: filepath.Join(*verDir, file.Name()), commitHash: nameParts[0]}
 		if len(nameParts) > 1 {
 			info.deltaHash = nameParts[1]
 		}

@@ -491,7 +491,7 @@ func doRemoveUnlabeled() {
 var goodDedupPath = regexp.MustCompile("/[0-9a-f]{2}/[0-9a-f]{38}$")
 
 func doGC() {
-	removed := 0
+	removed, space := 0, int64(0)
 	filepath.Walk(filepath.Join(*verDir, "_dedup"), func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return nil
@@ -508,11 +508,12 @@ func doGC() {
 		if err := os.Remove(path); err != nil {
 			log.Printf("failed to remove %s: %v", path, err)
 		} else {
+			space += info.Size()
 			removed++
 		}
 		return nil
 	})
-	fmt.Printf("removed %d unused file(s)\n", removed)
+	fmt.Printf("removed %d MB in %d unused file(s)\n", space>>20, removed)
 }
 
 func cp(src, dst string) {

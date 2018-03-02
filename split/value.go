@@ -6,7 +6,14 @@
 // +build go1.8,!go1.12
 
 // Package split provides a logical value type that is split across
-// one or more shards.
+// one or more shards to achieve better parallelism.
+//
+// Split values have many uses, but are primarily for optimizing
+// "write-mostly" shared data structures that have commutative
+// operations. Split values allow concurrent updates to happen on
+// different shards, which minimizes contention between updates.
+// However, reading the entire value requires combining all of these
+// shards, which is a potentially expensive operation.
 //
 // WARNING: This package depends on Go runtime internals. It has been
 // tested with Go 1.8 through Go 1.10, but may not work with older or

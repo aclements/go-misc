@@ -133,7 +133,7 @@ func (l *valueLogger) process(buf *valueLoggerBuf) {
 	valueLoggerBufPool.Put(buf)
 }
 
-func BenchmarkLazyAggregation(b *testing.B) {
+func BenchmarkLazyAggregationSplit(b *testing.B) {
 	// Benchmark a lazy aggregating value logger.
 	logger := New(func(l *valueLogger) { *l = newValueLogger() })
 

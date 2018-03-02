@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func BenchmarkCounter(b *testing.B) {
+func BenchmarkCounterSplit(b *testing.B) {
 	// Benchmark a simple split counter.
 	counter := New(func(*uint64) {})
 

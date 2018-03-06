@@ -10,6 +10,53 @@ import (
 	"testing"
 )
 
+// valueLoggerLocked is an implementation of a value logger that uses
+// locking to protect concurrent access.
+type valueLoggerLocked struct {
+	sync.Mutex
+	vals *valueLoggerBuf
+	pos  int
+}
+
+func newValueLoggerLocked() valueLoggerLocked {
+	var l valueLoggerLocked
+	l.vals = valueLoggerBufPool.Get().(*valueLoggerBuf)
+	return l
+}
+
+func (l *valueLoggerLocked) append(v uint64) {
+	l.Lock()
+	l.vals[l.pos] = v
+	l.pos++
+	if l.pos == len(l.vals) {
+		buf := l.vals
+		l.vals = new(valueLoggerBuf)
+		l.pos = 0
+		l.Unlock()
+		l.process(buf)
+	} else {
+		l.Unlock()
+	}
+}
+
+func (l *valueLoggerLocked) process(buf *valueLoggerBuf) {
+	// In a real system, this would do something with the data in
+	// buf. Here we just discard it.
+	valueLoggerBufPool.Put(buf)
+}
+
+func BenchmarkLazyAggregationSplitLocked(b *testing.B) {
+	// Benchmark a lazy aggregating value logger that uses locking
+	// instead of atomics.
+	logger := New(func(l *valueLoggerLocked) { *l = newValueLoggerLocked() })
+
+	b.RunParallel(func(pb *testing.PB) {
+		for i := uint64(0); pb.Next(); i++ {
+			logger.Get().(*valueLoggerLocked).append(i)
+		}
+	})
+}
+
 const (
 	log2ValueLoggerBuf  = 8 // 256 entries per buffer
 	log2ValueLoggerBufs = 1 // Double buffering
@@ -23,8 +70,9 @@ type valueLoggerBuf [1 << log2ValueLoggerBuf]uint64
 
 var valueLoggerBufPool = sync.Pool{New: func() interface{} { return new(valueLoggerBuf) }}
 
-// valueLogger is a thread-safe logger for uint64 values.
-type valueLogger struct {
+// valueLoggerAtomic is a value logger that uses atomics to protect
+// concurrent access.
+type valueLoggerAtomic struct {
 	// control is the buffer control field. It consists of several
 	// bit fields. The low bits consist of N fields that are each
 	// activeWriterBits wide and corresponds to indexes into vals.
@@ -48,15 +96,15 @@ type valueLogger struct {
 	allocLock sync.Mutex
 }
 
-func newValueLogger() valueLogger {
-	var l valueLogger
+func newValueLogger() valueLoggerAtomic {
+	var l valueLoggerAtomic
 	for i := range l.vals {
 		l.vals[i] = valueLoggerBufPool.Get().(*valueLoggerBuf)
 	}
 	return l
 }
 
-func (l *valueLogger) append(v uint64) {
+func (l *valueLoggerAtomic) append(v uint64) {
 	// Claim a slot and increment the active count for that
 	// buffer. The active count acts as a lock on vals[bufIdx].
 	var i, bufIdx, activeShift uint64
@@ -127,19 +175,19 @@ func (l *valueLogger) append(v uint64) {
 	l.process(completeBuf)
 }
 
-func (l *valueLogger) process(buf *valueLoggerBuf) {
+func (l *valueLoggerAtomic) process(buf *valueLoggerBuf) {
 	// In a real system, this would do something with the data in
 	// buf. Here we just discard it.
 	valueLoggerBufPool.Put(buf)
 }
 
-func BenchmarkLazyAggregationSplit(b *testing.B) {
+func BenchmarkLazyAggregationSplitAtomic(b *testing.B) {
 	// Benchmark a lazy aggregating value logger.
-	logger := New(func(l *valueLogger) { *l = newValueLogger() })
+	logger := New(func(l *valueLoggerAtomic) { *l = newValueLogger() })
 
 	b.RunParallel(func(pb *testing.PB) {
 		for i := uint64(0); pb.Next(); i++ {
-			logger.Get().(*valueLogger).append(i)
+			logger.Get().(*valueLoggerAtomic).append(i)
 		}
 	})
 }

@@ -68,3 +68,13 @@ func BenchmarkCounterSequential(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkRWMutex(b *testing.B) {
+	var m RWMutex
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			m.RLock().RUnlock()
+		}
+	})
+}

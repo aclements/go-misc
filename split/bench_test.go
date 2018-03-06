@@ -6,17 +6,36 @@ package split
 
 import (
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
 
-func BenchmarkCounterSplit(b *testing.B) {
-	// Benchmark a simple split counter.
+func BenchmarkCounterSplitAtomic(b *testing.B) {
+	// Benchmark a simple split counter updating using atomics.
 	counter := New(func(*uint64) {})
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			atomic.AddUint64(counter.Get().(*uint64), 1)
+		}
+	})
+}
+
+func BenchmarkCounterSplitLocked(b *testing.B) {
+	// Benchmark a simple split counter using locking instead of atomics.
+	type shard struct {
+		sync.Mutex
+		val uint64
+	}
+	counter := New(func(*shard) {})
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			s := counter.Get().(*shard)
+			s.Lock()
+			s.val++
+			s.Unlock()
 		}
 	})
 }

@@ -35,7 +35,8 @@ func main() {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		after := time.Now()
-		fmt.Printf("%d\t%d ns/op\n", 1, after.Sub(before))
+		elapsed := time.Since(before)
+		ps := cmd.ProcessState
+		fmt.Printf("%d\t%d ns/op\t%d user-ns/op\t%d sys-ns/op\n", 1, elapsed, ps.UserTime(), ps.SystemTime())
 	}
 }

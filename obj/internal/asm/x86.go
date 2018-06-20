@@ -107,12 +107,14 @@ func (i *x86Inst) Control() Control {
 	return c
 }
 
+type locX86Reg uint8
+
 const (
-	locAX = locArch
-	locF0 = locAX + 16
-	locM0 = locF0 + 8
-	locX0 = locM0 + 8
-	locES = locX0 + 16
+	locAX locX86Reg = 0
+	locF0           = locAX + 16
+	locM0           = locF0 + 8
+	locX0           = locM0 + 8
+	locES           = locX0 + 16
 )
 
 var x86LocNames = [...]string{
@@ -123,14 +125,19 @@ var x86LocNames = [...]string{
 	"ES", "CS", "SS", "DS", "FS", "GS",
 }
 
-func (e Loc) String() string {
-	if e == LocMem {
-		return "mem"
+func (l locX86Reg) is(Loc)          {}
+func (l locX86Reg) IsPartial() bool { return false }
+func (l locX86Reg) less(o Loc) bool {
+	if o == LocMem {
+		return false
 	}
-	if idx := int(e - locAX); e >= locAX && idx < len(x86LocNames) {
-		return x86LocNames[idx]
+	return l < o.(locX86Reg)
+}
+func (l locX86Reg) String() string {
+	if 0 <= l && int(l) < len(x86LocNames) {
+		return x86LocNames[l]
 	}
-	return fmt.Sprintf("Loc(%d)", e)
+	return fmt.Sprintf("locX86Reg(%d)", l)
 }
 
 func (inst *x86Inst) Effects() (read, write LocSet) {
@@ -153,6 +160,7 @@ func (inst *x86Inst) Effects() (read, write LocSet) {
 	// registers (and memory?) and then used as a base, we
 	// understand that. (This requires some sort of fixed-point.)
 
+	read, write = make(LocSet, 4), make(LocSet, 4)
 	addReg := func(reg x86asm.Reg, e effect) {
 		if reg == 0 {
 			return
@@ -172,31 +180,31 @@ func (inst *x86Inst) Effects() (read, write LocSet) {
 		}
 
 		var rmw bool
-		var idx Loc
+		var loc locX86Reg
 		switch {
 		case x86asm.AL <= reg && reg <= x86asm.R15B:
 			// 8- and 16-bit writes modify *part* of a
 			// register, making these read/write of the
 			// larger register.
 			rmw = true
-			idx = Loc(reg-x86asm.AL) + locAX
+			loc = locX86Reg(reg-x86asm.AL) + locAX
 		case x86asm.AX <= reg && reg <= x86asm.R15W:
 			rmw = true
-			idx = Loc(reg-x86asm.AX) + locAX
+			loc = locX86Reg(reg-x86asm.AX) + locAX
 		case x86asm.EAX <= reg && reg <= x86asm.R15L:
 			// These are zero-extended to 64 bits, and
 			// hence *not* RMW.
-			idx = Loc(reg-x86asm.EAX) + locAX
+			loc = locX86Reg(reg-x86asm.EAX) + locAX
 		case x86asm.RAX <= reg && reg <= x86asm.R15:
-			idx = Loc(reg-x86asm.RAX) + locAX
+			loc = locX86Reg(reg-x86asm.RAX) + locAX
 		case x86asm.F0 <= reg && reg <= x86asm.F7:
-			idx = Loc(reg-x86asm.F0) + locF0
+			loc = locX86Reg(reg-x86asm.F0) + locF0
 		case x86asm.M0 <= reg && reg <= x86asm.M7:
-			idx = Loc(reg-x86asm.M0) + locM0
+			loc = locX86Reg(reg-x86asm.M0) + locM0
 		case x86asm.X0 <= reg && reg <= x86asm.X15:
-			idx = Loc(reg-x86asm.X0) + locX0
+			loc = locX86Reg(reg-x86asm.X0) + locX0
 		case x86asm.ES <= reg && reg <= x86asm.GS:
-			idx = Loc(reg-x86asm.ES) + locES
+			loc = locX86Reg(reg-x86asm.ES) + locES
 		default:
 			panic(fmt.Sprintf("unknown register %s in %s", reg, inst.Inst))
 		}
@@ -204,10 +212,10 @@ func (inst *x86Inst) Effects() (read, write LocSet) {
 			e = rw
 		}
 		if e&r != 0 {
-			read |= 1 << idx
+			read.Add(loc)
 		}
 		if e&w != 0 {
-			write |= 1 << idx
+			write.Add(loc)
 		}
 	}
 
@@ -241,10 +249,10 @@ func (inst *x86Inst) Effects() (read, write LocSet) {
 				break
 			}
 			if effect&r != 0 {
-				read |= 1 << LocMem
+				read.Add(LocMem)
 			}
 			if effect&w != 0 {
-				write |= 1 << LocMem
+				write.Add(LocMem)
 			}
 		case x86asm.Imm:
 			if effect != r {
@@ -261,10 +269,10 @@ func (inst *x86Inst) Effects() (read, write LocSet) {
 				// Control flow target; not a memory op
 			default:
 				if effect&r != 0 {
-					read |= 1 << LocMem
+					read.Add(LocMem)
 				}
 				if effect&w != 0 {
-					write |= 1 << LocMem
+					write.Add(LocMem)
 				}
 			}
 		}
@@ -312,7 +320,9 @@ func (inst *x86Inst) Effects() (read, write LocSet) {
 	switch inst.Op {
 	case x86asm.XOR, x86asm.XORPD, x86asm.XORPS:
 		if inst.Args[0] == inst.Args[1] {
-			read = 0
+			for loc := range read {
+				delete(read, loc)
+			}
 		}
 	}
 

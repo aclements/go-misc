@@ -4,7 +4,7 @@
 
 package asm
 
-import "math/bits"
+import "sort"
 
 // TODO: Generalize to more than an index so we can support stack
 // slots. Compute stack slot Locs.
@@ -59,50 +59,60 @@ const (
 	ControlExit
 )
 
-type LocSet uint64
+// A Loc is a storage location. All Locs are distinct, but may
+// represent just part of a location (for example, for an array, the
+// Loc would be the whole array, so a write to that Loc may or may not
+// alias a read from that Loc).
+//
+// TODO: It would be nice if we could at least express an aliasing
+// hierarchy and have an "Aliases(o Loc) Alias" method. However, for
+// SSA we'd probably need to collapse all of the may-alias clusters
+// into one location.
+type Loc interface {
+	is(Loc)
+	less(Loc) bool
 
-type Loc uint8
+	String() string
 
-const (
-	LocMem Loc = iota
-	locArch
-)
-
-func (s LocSet) Aliases(o LocSet) Alias {
-	alias := AliasNo
-	if s&o&(1<<LocMem) != 0 {
-		// Memory aliases are imprecise.
-		alias = AliasMay
-	}
-	if (s&o)&^(1<<LocMem) != 0 {
-		// Register aliases are precise.
-		//
-		// TODO: Not strictly true because we coarsen, e.g.,
-		// AL and AH.
-		alias = AliasMust
-	}
-	return alias
+	// IsPartial returns true if this may-alias with other
+	// instances of the same location. If this must-alias with the
+	// same location, IsPartial returns false.
+	IsPartial() bool
 }
 
-type Alias int
+type locMem struct{}
 
-const (
-	AliasNo Alias = iota
-	AliasMay
-	AliasMust
-)
-
-func (s LocSet) First() (Loc, bool) {
-	if s == 0 {
-		return 0, false
-	}
-	return Loc(bits.TrailingZeros64(uint64(s))), true
+func (m locMem) is(Loc)          {}
+func (m locMem) less(o Loc) bool { return o != m } // locMem comes first
+func (m locMem) String() string  { return "mem" }
+func (m locMem) IsPartial() bool {
+	return true
 }
 
-func (s LocSet) Next(n Loc) (Loc, bool) {
-	s >>= uint(n + 1)
-	if s == 0 {
-		return 0, false
+// LocMem represents all of memory that can be proven not to alias
+// with other memory locations.
+var LocMem = locMem{}
+
+// LocSet is a set of locations.
+type LocSet map[Loc]struct{}
+
+// Add adds l to s.
+func (s *LocSet) Add(l Loc) {
+	(*s)[l] = struct{}{}
+}
+
+// Has returns true if l is in s.
+func (s *LocSet) Has(l Loc) bool {
+	_, ok := (*s)[l]
+	return ok
+}
+
+// Ordered returns the set of locations in s in deterministic order.
+func (s *LocSet) Ordered() []Loc {
+	locs := make([]Loc, 0, len(*s))
+	for loc := range *s {
+		locs = append(locs, loc)
 	}
-	return n + 1 + Loc(bits.TrailingZeros64(uint64(s))), true
+	sort.Slice(locs, func(i, j int) bool { return locs[i].less(locs[j]) })
+	return locs
 }

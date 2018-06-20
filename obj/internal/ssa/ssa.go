@@ -106,24 +106,24 @@ func SSA(seq asm.Seq, asmBlocks []*asm.BasicBlock) *Func {
 	df := graph.DomFrontier(asm.BasicBlockGraph(asmBlocks), 0, idom)
 
 	// Collect the read/write sets of all instructions.
-	type rwSet struct{ r, w asm.LocSet }
+	type rwSet struct{ r, w []asm.Loc }
 	effects := make([]rwSet, seq.Len())
 	for i := range effects {
-		effects[i].r, effects[i].w = seq.Get(i).Effects()
-
-		if effects[i].w&(1<<asm.LocMem) != 0 {
+		r, w := seq.Get(i).Effects()
+		if w.Has(asm.LocMem) {
 			// All mem writes are, in effect, partial, so
 			// if an operation writes part of mem, it also
 			// has to pass through the rest of mem.
-			effects[i].r |= 1 << asm.LocMem
+			r.Add(asm.LocMem)
 		}
+		effects[i].r, effects[i].w = r.Ordered(), w.Ordered()
 	}
 
 	// Place phis. We compute the iterated dominance frontier
-	// on-the-fly as we're doing this. We temporarily use
-	// Value.Inst to record the assembly variable name.
-	var addPhis func(bdf []int, name asm.Loc)
-	addPhis = func(bdf []int, name asm.Loc) {
+	// on-the-fly as we're doing this.
+	phiLocs := map[*Value]asm.Loc{}
+	var addPhis func(bdf []int, loc asm.Loc)
+	addPhis = func(bdf []int, loc asm.Loc) {
 	nextBlock:
 		for _, bi := range bdf {
 			b := blocks[bi]
@@ -131,22 +131,23 @@ func SSA(seq asm.Seq, asmBlocks []*asm.BasicBlock) *Func {
 			// Add the phi to b if it doesn't already have
 			// one for this variable.
 			for _, v := range b.Values {
-				if v.Op == OpPhi && v.Inst == int(name) {
+				if v.Op == OpPhi && phiLocs[v] == loc {
 					continue nextBlock
 				}
 			}
 			phiArgs := make([]*Value, len(b.Src.Preds))
-			b.Values = append(b.Values, &Value{Op: OpPhi, Inst: int(name), Args: phiArgs})
+			phi := &Value{Op: OpPhi, Args: phiArgs}
+			phiLocs[phi] = loc
+			b.Values = append(b.Values, phi)
 
 			// Iterate on the dominance frontier since we
 			// just added a definition.
-			addPhis(df[bi], name)
+			addPhis(df[bi], loc)
 		}
 	}
 	for bi, b := range blocks {
 		for i := b.Src.Start; i < b.Src.End; i++ {
-			wSet := effects[i].w
-			for w, ok := wSet.First(); ok; w, ok = wSet.Next(w) {
+			for _, w := range effects[i].w {
 				// Add phi for variable w to b's DF.
 				addPhis(df[bi], w)
 			}
@@ -177,8 +178,7 @@ func SSA(seq asm.Seq, asmBlocks []*asm.BasicBlock) *Func {
 
 		// Transform phis.
 		for _, val := range b.Values {
-			// Variable is encoded in val.Inst.
-			w := asm.Loc(val.Inst)
+			w := phiLocs[val]
 			undoStack = append(undoStack, undo{w, vals[w]})
 			vals[w] = val
 		}
@@ -189,8 +189,7 @@ func SSA(seq asm.Seq, asmBlocks []*asm.BasicBlock) *Func {
 			b.Values = append(b.Values, val)
 
 			// Map read set into argument values.
-			rSet := effects[i].r
-			for r, ok := rSet.First(); ok; r, ok = rSet.Next(r) {
+			for _, r := range effects[i].r {
 				if vals[r] == nil {
 					addEntry(r)
 				}
@@ -198,8 +197,7 @@ func SSA(seq asm.Seq, asmBlocks []*asm.BasicBlock) *Func {
 			}
 
 			// Map write set into new values.
-			wSet := effects[i].w
-			for w, ok := wSet.First(); ok; w, ok = wSet.Next(w) {
+			for _, w := range effects[i].w {
 				undoStack = append(undoStack, undo{w, vals[w]})
 				vals[w] = val
 			}
@@ -214,11 +212,11 @@ func SSA(seq asm.Seq, asmBlocks []*asm.BasicBlock) *Func {
 					break
 				}
 
-				phiVar := asm.Loc(phi.Inst)
-				if vals[phiVar] == nil {
-					addEntry(phiVar)
+				phiLoc := phiLocs[phi]
+				if vals[phiLoc] == nil {
+					addEntry(phiLoc)
 				}
-				phi.Args[edge.RIndex] = vals[phiVar]
+				phi.Args[edge.RIndex] = vals[phiLoc]
 			}
 		}
 
@@ -239,19 +237,9 @@ func SSA(seq asm.Seq, asmBlocks []*asm.BasicBlock) *Func {
 	// Combine the entry values into the entry block.
 	blocks[0].Values = append(entryValues, blocks[0].Values...)
 
-	// Clear phi variable IDs.
-	for _, b := range blocks {
-		for _, phi := range b.Values {
-			if phi.Op != OpPhi {
-				break
-			}
-			phi.Inst = 0
-		}
-	}
-
 	// Prune unused synthetic values (OpPhi and OpEntry) by
-	// flooding uses from actual values (OpInst). We reuse the
-	// Inst field for this mark.
+	// flooding uses from actual values (OpInst). We use the Inst
+	// field for this mark.
 	var floodUse func(val *Value)
 	floodUse = func(val *Value) {
 		if !(val.Op == OpPhi || val.Op == OpEntry) {
@@ -275,7 +263,7 @@ func SSA(seq asm.Seq, asmBlocks []*asm.BasicBlock) *Func {
 			}
 		}
 	}
-	// Delete unmarked values and clear Inst again.
+	// Delete unmarked values and clear Inst.
 	for _, b := range blocks {
 		j := 0
 		for i, val := range b.Values {

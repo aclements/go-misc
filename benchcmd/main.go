@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 )
 
@@ -36,6 +37,11 @@ func main() {
 			os.Exit(1)
 		}
 		after := time.Now()
-		fmt.Printf("%d\t%d ns/op\n", 1, after.Sub(before))
+		fmt.Printf("%d\t%d ns/op", 1, after.Sub(before))
+		fmt.Printf("\t%d user-ns/op\t%d sys-ns/op", cmd.ProcessState.UserTime(), cmd.ProcessState.SystemTime())
+		if ru, ok := cmd.ProcessState.SysUsage().(*syscall.Rusage); ok {
+			fmt.Printf("\t%d peak-RSS-bytes", ru.Maxrss*(1<<10))
+		}
+		fmt.Printf("\n")
 	}
 }

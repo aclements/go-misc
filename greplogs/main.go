@@ -85,7 +85,18 @@ func main() {
 	var stripDir string
 	if *flagDashboard {
 		revDir := filepath.Join(xdgCacheDir(), "fetchlogs", "rev")
-		paths = []string{revDir}
+		fis, err := ioutil.ReadDir(revDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", revDir, err)
+			os.Exit(1)
+		}
+		for _, fi := range fis {
+			if !fi.IsDir() {
+				continue
+			}
+			paths = append(paths, filepath.Join(revDir, fi.Name()))
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(paths)))
 		stripDir = revDir + "/"
 	} else {
 		paths = flag.Args()

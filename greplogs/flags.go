@@ -41,3 +41,11 @@ func (x *regexpList) AllMatch(data []byte) bool {
 	}
 	return true
 }
+
+func (x *regexpList) Matches(data []byte) [][]int {
+	matches := [][]int{}
+	for _, r := range *x {
+		matches = append(matches, r.FindAllSubmatchIndex(data, -1)...)
+	}
+	return matches
+}

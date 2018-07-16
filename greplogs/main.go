@@ -22,6 +22,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/aclements/go-misc/internal/loganal"
@@ -44,6 +45,15 @@ var (
 	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
 	flagMD        = flag.Bool("md", false, "output in Markdown")
 	flagFilesOnly = flag.Bool("l", false, "print only names of matching files")
+	flagColor     = flag.String("color", "auto", "highlight output in color: `mode` is never, always, or auto")
+
+	color *colorizer
+)
+
+const (
+	colorPath      = colorFgMagenta
+	colorPathColon = colorFgCyan
+	colorMatch     = colorBold | colorFgRed
 )
 
 func main() {
@@ -56,6 +66,17 @@ func main() {
 	// Validate flags.
 	if *flagDashboard && flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "-dashboard and paths are incompatible\n")
+		os.Exit(2)
+	}
+	switch *flagColor {
+	case "never":
+		color = newColorizer(false)
+	case "always":
+		color = newColorizer(true)
+	case "auto":
+		color = newColorizer(canColor())
+	default:
+		fmt.Fprintf(os.Stderr, "-color must be one of never, always, or auto")
 		os.Exit(2)
 	}
 
@@ -130,7 +151,7 @@ func process(path, nicePath string) (found bool, err error) {
 	}
 
 	if *flagFilesOnly {
-		fmt.Printf("%s\n", printPath)
+		fmt.Printf("%s\n", color.color(printPath, colorPath))
 		return true, nil
 	}
 
@@ -142,21 +163,72 @@ func process(path, nicePath string) (found bool, err error) {
 
 	// Print failures.
 	for _, failure := range failures {
-		msg := failure.FullMessage
-		if msg == "" {
-			msg = failure.Message
+		var msg []byte
+		if failure.FullMessage != "" {
+			msg = []byte(failure.FullMessage)
+		} else {
+			msg = []byte(failure.Message)
 		}
 
-		if len(failRegexps) > 0 && !failRegexps.AllMatch([]byte(msg)) {
+		if len(failRegexps) > 0 && !failRegexps.AllMatch(msg) {
 			continue
 		}
 
-		fmt.Printf("%s:\n", printPath)
+		fmt.Printf("%s%s\n", color.color(printPath, colorPath), color.color(":", colorPathColon))
 		if *flagMD {
-			fmt.Printf("```\n%s\n```\n\n", msg)
-		} else {
-			fmt.Printf("%s\n\n", msg)
+			fmt.Printf("```\n")
 		}
+		if !color.enabled {
+			fmt.Printf("%s", msg)
+		} else {
+			// Find specific matches and highlight them.
+			matches := mergeMatches(append(fileRegexps.Matches(msg),
+				failRegexps.Matches(msg)...))
+			printed := 0
+			for _, m := range matches {
+				fmt.Printf("%s%s", msg[printed:m[0]], color.color(string(msg[m[0]:m[1]]), colorMatch))
+				printed = m[1]
+			}
+			fmt.Printf("%s", msg[printed:])
+		}
+		if *flagMD {
+			fmt.Printf("\n```")
+		}
+		fmt.Printf("\n\n")
 	}
 	return true, nil
+}
+
+func mergeMatches(matches [][]int) [][]int {
+	sort.Slice(matches, func(i, j int) bool { return matches[i][0] < matches[j][0] })
+	for i := 0; i < len(matches); {
+		m := matches[i]
+
+		// Combine with later matches.
+		j := i + 1
+		for ; j < len(matches); j++ {
+			m2 := matches[j]
+			if m[1] <= m2[0] {
+				// Overlapping or exactly adjacent.
+				if m2[1] > m[1] {
+					m[1] = m2[1]
+				}
+				m2[0], m2[1] = 0, 0
+			} else {
+				break
+			}
+		}
+		i = j
+	}
+
+	// Clear out combined matches.
+	j := 0
+	for _, m := range matches {
+		if m[0] == 0 && m[1] == 0 {
+			continue
+		}
+		matches[j] = m
+		j++
+	}
+	return matches[:j]
 }

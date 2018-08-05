@@ -1,0 +1,90 @@
+#!/usr/bin/python3
+
+# Copyright 2018 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+# whichtest extracts relevant stacks from go test timeout tracebacks.
+#
+# It strips out system goroutines and parallel tests that are blocked
+# waiting for other tests to complete, and pairs up goroutines created
+# by tests when it can.
+
+# TODO: Also extract regular test failures to make this a
+# one-size-fits-all tool.
+
+import collections
+import sys
+
+def parseTraces(f):
+    traces = []
+    createdBy = collections.defaultdict(list)
+    accum = 0
+    for line in f:
+        prevAccum = accum
+        if line.startswith("runtime stack:"):
+            accum = 2
+        elif line.startswith("goroutine "):
+            accum = 1
+        elif line.strip() == "":
+            accum -= 1
+        elif line.startswith("created by ") and accum > 0:
+            createdBy[line.split()[2]].append(traces[-1])
+        if accum > 0:
+            if prevAccum <= 0:
+                traces.append([line])
+            else:
+                traces[-1].append(line)
+    return traces, createdBy
+
+def findTest(trace):
+    test, isPar = None, False
+    for line in trace:
+        if line.startswith("testing.(*T).Parallel"):
+            # Blocked in testing.T.Parallel
+            isPar = True
+        elif line.startswith("testing.tRunner("):
+            return test, isPar
+        elif ".Test" in line and "(" in line:
+            test = line.split("(", 1)[0]
+    return None, False
+
+def traceFns(trace):
+    for line in trace:
+        if line.startswith(("\t", "runtime stack:", "goroutine ", "created by ")):
+            continue
+        if "(" in line:
+            yield line.split("(", 1)[0]
+
+traces, createdBy = parseTraces(sys.stdin)
+for trace in traces:
+    test, isPar = findTest(trace)
+    if test is None or isPar:
+        continue
+    print("===", test, "===")
+    print()
+    sys.stdout.write("".join(trace))
+    print()
+    # Print goroutines that are probably associated with this test
+    # (this may have false positives).
+    for fn in traceFns(trace):
+        cbs = createdBy.get(fn)
+        if cbs is not None:
+            del createdBy[fn]
+            for cb in cbs:
+                sys.stdout.write("".join(cb))
+                print()
+
+# Goroutines may have been started by functions no longer on a test's
+# stack. Print those. Leaked goroutines may also be interesting.
+anyOther = False
+for cb, traces in sorted(createdBy.items()):
+    if cb.startswith(("runtime.", "testing.", "time.goFunc")):
+        continue
+    if not anyOther:
+        print("=== Other goroutines ===")
+        print()
+        anyOther = True
+    for trace in traces:
+        sys.stdout.write("".join(trace))
+        print()

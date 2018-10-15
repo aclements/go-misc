@@ -1,0 +1,110 @@
+#!/usr/bin/python3
+
+import os
+import sys
+import tempfile
+import subprocess
+import argparse
+import re
+
+def expandHash(commits, h):
+    x = None
+    for c in commits:
+        if c.startswith(h):
+            if x != None:
+                raise ValueError("ambiguous commit hash " + h)
+            x = c
+    return x
+
+def main():
+    parser = argparse.ArgumentParser(description="disentangle benchmark output")
+    parser.add_argument("-C", metavar="gitdir", help="git repo for resolving commit hashes", default=os.path.expanduser("~/go.dev"))
+    parser.add_argument("-o", metavar="base", help="write output to base-commit.log instead of invoking benchstat")
+    parser.add_argument("-benchsave", action="store_true", help="invoke benchsave instead of benchstat")
+    parser.add_argument("-geomean", action="store_true", help="pass -geomean to benchstat")
+    parser.add_argument("-delta-test", help="pass -delta-test to benchstat")
+    parser.add_argument("logs", nargs="+", help="input benchmark log files")
+    parser.add_argument("commits", nargs="*", help="commits to show")
+    args = parser.parse_args()
+
+    benchstat = args.o == None
+    if benchstat:
+        tmpdir = tempfile.TemporaryDirectory()
+        args.o = os.path.join(tmpdir.name, "out")
+
+    # Separate logs and commits arguments
+    for i, arg in enumerate(args.logs):
+        if re.fullmatch("[0-9a-fA-F]{5,}", arg):
+            args.commits = args.logs[i:]
+            args.logs = args.logs[:i]
+            break
+        if arg == "--":
+            args.commits = args.logs[i+1:]
+            args.logs = args.logs[:i]
+            break
+
+    # Process input files into output files
+    fmap = {}
+    logCommits = set()
+    for inp in args.logs:
+        parseInput(inp, args.o, fmap, logCommits)
+    for f, name in fmap.values():
+        f.close()
+
+    # Get commit order
+    listArgs = [list(logCommits)]
+    if args.commits:
+        # We want to accept revision list arguments, but keep things
+        # in argument order if there's more than one argument. This
+        # means we have to call rev-list separately for each argument.
+        listArgs = [["--no-walk", c] for c in args.commits]
+    commits = []
+    for listArg in listArgs:
+        commits += subprocess.check_output(["git", "-C", args.gitdir, "rev-list", "--topo-order", "--reverse"] + listArg, universal_newlines=True).splitlines()
+    order = {cid: i for i, cid in enumerate(commits)}
+
+    # Get names in commit order.
+    if args.commits:
+        names = [args.o + "-" + expandHash(commits, h)[:10] + ".log" for h in commits]
+    else:
+        names = [fmap[cid][1]
+                 for cid in sorted(fmap.keys(), key=lambda cid: order[cid])]
+
+    if benchstat:
+        # Invoke benchstat/benchsave
+        try:
+            os.chdir(os.path.dirname(args.o))
+            if args.benchsave:
+                benchargs = ["benchsave"]
+            else:
+                benchargs = ["benchstat"]
+                if args.geomean:
+                    benchargs.append("-geomean")
+                if args.delta_test:
+                    benchargs.extend(["-delta-test", args.delta_test])
+            subprocess.check_call(benchargs + list(map(os.path.basename, names)),
+                                  stdout=sys.stdout, stderr=sys.stderr)
+        finally:
+            # Allow deletion of temporary directory.
+            os.chdir("/")
+    else:
+        print(" ".join(names))
+
+def parseInput(path, outbase, fmap, logCommits):
+    infile = open(path)
+    outfile = None
+
+    f = None
+    for l in infile:
+        if l.startswith("commit: "):
+            chash = l.split()[1].strip()
+            logCommits.add(chash)
+            f, name = fmap.get(chash, (None, None))
+            if f is None:
+                name = outbase + "-" + chash[:10] + ".log"
+                f = open(name, "w")
+                fmap[chash] = (f, name)
+        elif f:
+            f.write(l)
+
+main()

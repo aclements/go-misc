@@ -60,7 +60,7 @@ def main():
         listArgs = [["--no-walk", c] for c in args.commits]
     commits = []
     for listArg in listArgs:
-        commits += subprocess.check_output(["git", "-C", args.gitdir, "rev-list", "--topo-order", "--reverse"] + listArg, universal_newlines=True).splitlines()
+        commits += subprocess.check_output(["git", "-C", args.C, "rev-list", "--topo-order", "--reverse"] + listArg, universal_newlines=True).splitlines()
     order = {cid: i for i, cid in enumerate(commits)}
 
     # Get names in commit order.

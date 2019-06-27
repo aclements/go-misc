@@ -117,6 +117,18 @@ func (p *BuildletPool) Checkin(g *Gomote) {
 				copy(p.pool[i:], p.pool[i+1:])
 				p.pool = p.pool[:len(p.pool)-1]
 				// Destroy
+				//
+				// TODO: This often fails without
+				// error with logs like "Buildlet
+				// https://farmer.golang.org:443
+				// failed three heartbeats; final
+				// error: timeout waiting for headers"
+				// or "final error: 502 Bad Gateway"
+				// and leaves the buildlet running.
+				// I'm not sure what I can do about
+				// that, since g.Buildlet thinks it's
+				// dead at that point, and getting it
+				// back by name could race.
 				if err := g.Buildlet.Close(); err != nil {
 					panic(fmt.Errorf("failed to destroy buildlet %s: %v", name, err))
 				}
@@ -147,15 +159,9 @@ func (p *BuildletPool) Shutdown() {
 }
 
 func (g *Gomote) Ping() error {
-	any := false
-	err := g.Buildlet.ListDir(".", buildlet.ListDirOpts{}, func(buildlet.DirEntry) {
-		any = true
-	})
+	err := g.Buildlet.ListDir(".", buildlet.ListDirOpts{}, func(buildlet.DirEntry) {})
 	if err != nil {
 		return err
-	}
-	if !any {
-		return fmt.Errorf("ListDir failed: no entries returned")
 	}
 	return nil
 }

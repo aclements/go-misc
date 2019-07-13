@@ -27,7 +27,7 @@ var (
 	flagDry      = flag.Bool("dry-run", false, "print but do not execute commands")
 )
 
-var clRe = regexp.MustCompile("[0-9]+|I[0-9a-f]{40}")
+var clRe = regexp.MustCompile("^[0-9]+$|^I[0-9a-f]{40}$")
 
 type Tag struct {
 	tag    string
@@ -53,7 +53,7 @@ func main() {
 	}
 	for _, arg := range flag.Args() {
 		if !clRe.MatchString(arg) {
-			fmt.Fprintf(os.Stderr, "CL must be a CL number or Change-Id")
+			fmt.Fprintf(os.Stderr, "CL must be a CL number or Change-Id\n")
 			os.Exit(2)
 		}
 		queryParts = append(queryParts, "change:"+arg)

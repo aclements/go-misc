@@ -154,6 +154,11 @@ func (f FlagRegexp) Set(x string) error {
 	if err != nil {
 		return err
 	}
+	// Now that we've checked the syntax, make them line-oriented.
+	re, err = regexp.Compile("(?m)" + x)
+	if err != nil {
+		panic("failed to set m flag: " + err.Error())
+	}
 	*f.x = re
 	return nil
 }

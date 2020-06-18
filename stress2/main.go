@@ -46,19 +46,14 @@ flaky failure.
 	flag.DurationVar(&s.Timeout, "timeout", 10*time.Minute, "timeout each process after `duration`")
 	defaultDir := filepath.Join(os.TempDir(), time.Now().Format("stress-20060102T150405"))
 	flag.StringVar(&s.OutDir, "o", defaultDir, "output failure logs to `directory`")
-	flag.Var(FlagLimit{&s.MaxRuns}, "max-runs", "exit after `N` passes+fails (but not flakes)")
+	flag.Var(FlagLimit{&s.MaxRuns}, "max-runs", "exit after `N` passes+fails (but not flakes/timeouts)")
 	flag.Var(FlagLimit{&s.MaxTotalRuns}, "max-total-runs", "exit after `N` runs with any outcome")
 	flag.Var(FlagLimit{&s.MaxPasses}, "max-passes", "exit after `N` successful runs")
 	flag.Var(FlagLimit{&s.MaxFails}, "max-fails", "exit after `N` failed runs")
-	// TODO: Flag for max pass+fail? So you can say "I want 10
-	// informative runs". Maybe that should be -max-runs and limit
-	// on total runs should be -max-total-runs.
-	//
 	// TODO: Flag to consider timeouts to be failures?
 	//
-	// TODO: Flag to keep failed subprocesses around for
-	// inspection. I wanted this even for #38440 so I could
-	// inspect crash dumps.
+	// TODO: Flag to keep timed-out subprocesses around for
+	// inspection.
 	flag.Var(FlagRegexp{&s.FailRe}, "fail", "fail only if output matches `regexp`")
 	flag.Var(FlagRegexp{&s.PassRe}, "pass", "pass only if output matches `regexp`")
 	flag.Parse()

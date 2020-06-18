@@ -15,6 +15,13 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 )
 
+type StressReporter interface {
+	io.Writer
+	StartStatus()
+	Status(format string, a ...interface{})
+	StopStatus()
+}
+
 func NewStdoutReporter() StressReporter {
 	if os.Getenv("TERM") == "" || os.Getenv("TERM") == "dumb" || !terminal.IsTerminal(syscall.Stdout) {
 		return &ReporterDumb{w: os.Stdout}
@@ -28,8 +35,9 @@ type ReporterDumb struct {
 
 func (r *ReporterDumb) StartStatus() {}
 func (r *ReporterDumb) StopStatus()  {}
-func (r *ReporterDumb) Status(status string) {
-	fmt.Fprintf(r.w, "%s\n", status)
+func (r *ReporterDumb) Status(format string, a ...interface{}) {
+	fmt.Fprintf(r.w, format, a...)
+	r.w.Write([]byte{'\n'})
 }
 func (r *ReporterDumb) Write(data []byte) (int, error) {
 	return r.w.Write(data)
@@ -38,14 +46,14 @@ func (r *ReporterDumb) Write(data []byte) (int, error) {
 type ReporterVT100 struct {
 	w      io.Writer
 	stop   chan struct{}
-	update chan string
+	update chan func() string
 	wg     sync.WaitGroup
 	mu     sync.Mutex
 }
 
 func (r *ReporterVT100) StartStatus() {
 	r.stop = make(chan struct{})
-	r.update = make(chan string)
+	r.update = make(chan func() string)
 	r.wg.Add(1)
 	go r.run()
 }
@@ -55,8 +63,10 @@ func (r *ReporterVT100) StopStatus() {
 	r.wg.Wait()
 }
 
-func (r *ReporterVT100) Status(status string) {
-	r.update <- status
+func (r *ReporterVT100) Status(format string, a ...interface{}) {
+	r.update <- func() string {
+		return fmt.Sprintf(format, a...)
+	}
 }
 
 // VT100 control sequences
@@ -79,14 +89,14 @@ func (r *ReporterVT100) run() {
 	const ticker = "-\\|/"
 
 	i := 0
-	status := ""
+	status := func() string { return "" }
 	tick := time.NewTicker(time.Second / 2)
 	defer func() {
 		tick.Stop()
 
 		// Keep the last status line.
 		r.mu.Lock()
-		fmt.Fprintf(r.w, "%s%s%s%s\n", resetLine, wrapOff, status, wrapOn)
+		fmt.Fprintf(r.w, "%s%s%s%s\n", resetLine, wrapOff, status(), wrapOn)
 		r.mu.Unlock()
 
 		r.wg.Done()
@@ -95,7 +105,7 @@ func (r *ReporterVT100) run() {
 	for {
 		// Print the status line plus a ticker.
 		r.mu.Lock()
-		fmt.Fprintf(r.w, "%s%s%s%s%c", resetLine, wrapOff, status, moveEOL, ticker[i%len(ticker)])
+		fmt.Fprintf(r.w, "%s%s%s%s%c", resetLine, wrapOff, status(), moveEOL, ticker[i%len(ticker)])
 		r.mu.Unlock()
 
 		select {

@@ -66,13 +66,6 @@ func (s *Stress) resultKind(res result) ResultKind {
 	}
 }
 
-type StressReporter interface {
-	io.Writer
-	StartStatus()
-	Status(status string)
-	StopStatus()
-}
-
 func (s *Stress) Run(reporter StressReporter) ResultKind {
 	// Replace "0 as infinity" limits with a value that's easy to
 	// compare against.
@@ -119,7 +112,7 @@ func (s *Stress) Run(reporter StressReporter) ResultKind {
 		if n := counts[ResultTimeout]; n > 0 {
 			fmt.Fprintf(buf, ", %d timeouts", n)
 		}
-		reporter.Status(buf.String())
+		reporter.Status("%s", buf.String())
 	}
 loop:
 	for {

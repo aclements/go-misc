@@ -87,10 +87,14 @@ func (r *ReporterVT100) Write(data []byte) (int, error) {
 
 func (r *ReporterVT100) run() {
 	const ticker = "-\\|/"
+	// minUpdate is the minimum time between displaying updates.
+	const minUpdate = time.Second / 10
 
 	i := 0
 	status := func() string { return "" }
 	tick := time.NewTicker(time.Second / 2)
+	inhibit, pending := false, false
+	deinhibit := time.NewTimer(0)
 	defer func() {
 		tick.Stop()
 
@@ -107,12 +111,33 @@ func (r *ReporterVT100) run() {
 		r.mu.Lock()
 		fmt.Fprintf(r.w, "%s%s%s%s%c", resetLine, wrapOff, status(), moveEOL, ticker[i%len(ticker)])
 		r.mu.Unlock()
+		pending = false
 
+	ignore:
 		select {
 		case <-tick.C:
 			i++
 
 		case status = <-r.update:
+			if inhibit {
+				// There's a pending update. Show it
+				// when the inhibit expires.
+				pending = true
+				goto ignore
+			}
+			// Show this update, but then inhibit further
+			// updates for a little while.
+			inhibit = true
+			deinhibit.Reset(minUpdate)
+
+		case <-deinhibit.C:
+			// Refresh the displayed status if there are
+			// pending updates and allow the next status
+			// update to appear immediately.
+			inhibit = false
+			if !pending {
+				goto ignore
+			}
 
 		case <-r.stop:
 			return

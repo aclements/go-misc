@@ -273,15 +273,18 @@ func printTail(w io.Writer, data []byte) {
 	runeCount := 0
 	for pos > 0 {
 		// Find beginning of the next line.
-		pos = bytes.LastIndexByte(data[:lastNL], '\n') + 1
+		bol := bytes.LastIndexByte(data[:lastNL], '\n') + 1
 
 		// Would this line push us over either limit?
-		runeCount += utf8.RuneCount(data[pos:lastNL])
+		runeCount += utf8.RuneCount(data[bol:lastNL])
 		if runeCount > maxRunes {
 			break
 		}
-		lineCount++
+
+		// Include the line.
+		pos = bol
 		lastNL = pos - 1
+		lineCount++
 		if lineCount >= maxLines {
 			break
 		}

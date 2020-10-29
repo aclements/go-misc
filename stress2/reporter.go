@@ -144,3 +144,15 @@ func (r *ReporterVT100) run() {
 		}
 	}
 }
+
+// TimeSince formats as the duration since a given reference time.
+// This is intended for use in deferred format strings since it will
+// continue to show the correct duration as the current time changes.
+type TimeSince time.Time
+
+func (t TimeSince) String() string {
+	if time.Time(t).IsZero() {
+		return "?"
+	}
+	return time.Since(time.Time(t)).Round(time.Second).String()
+}

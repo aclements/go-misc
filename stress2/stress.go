@@ -36,6 +36,17 @@ type Stress struct {
 	Interrupt <-chan struct{}
 }
 
+type startRun struct {
+	id int64
+}
+
+type result struct {
+	id     int64
+	output []byte
+	status *os.ProcessState // nil on timeout
+	err    error            // If non-nil, error starting command
+}
+
 type ResultKind int
 
 const (
@@ -44,12 +55,6 @@ const (
 	ResultFlake
 	ResultTimeout
 )
-
-type result struct {
-	output []byte
-	status *os.ProcessState // nil on timeout
-	err    error            // If non-nil, error starting command
-}
 
 func (s *Stress) resultKind(res result) ResultKind {
 	switch {
@@ -76,9 +81,11 @@ func (s *Stress) Run(reporter StressReporter) ResultKind {
 		}
 	}
 
-	start := make(chan struct{}, s.Parallelism)
+	start := make(chan startRun, s.Parallelism)
 	stop := make(chan struct{})
 	results := make(chan result, s.Parallelism)
+	var id int64
+	activeStartTimes := make(map[int64]time.Time)
 
 	reporter.StartStatus()
 
@@ -92,7 +99,9 @@ func (s *Stress) Run(reporter StressReporter) ResultKind {
 			defer wg.Done()
 			s.runner(start, stop, results)
 		}()
-		start <- struct{}{}
+		start <- startRun{id}
+		activeStartTimes[id] = time.Now()
+		id++
 	}
 
 	// TODO: Rate limit restarts after failures.
@@ -101,9 +110,9 @@ func (s *Stress) Run(reporter StressReporter) ResultKind {
 	totalRuns := 0
 	outIdx := 0
 	counts := make(map[ResultKind]int)
+	var passFailTime time.Duration
 	updateStatus := func() {
-		// TODO: Average time per run? ETA if we have s.Max*?
-		// Duration of longest currently running task?
+		// TODO: ETA if we have s.Max*?
 		buf := new(bytes.Buffer)
 		fmt.Fprintf(buf, "%d passes, %d fails", counts[ResultPass], counts[ResultFail])
 		if n := counts[ResultFlake]; n > 0 {
@@ -112,7 +121,17 @@ func (s *Stress) Run(reporter StressReporter) ResultKind {
 		if n := counts[ResultTimeout]; n > 0 {
 			fmt.Fprintf(buf, ", %d timeouts", n)
 		}
-		reporter.Status("%s", buf.String())
+		var avg interface{} = "?"
+		if passFail := counts[ResultPass] + counts[ResultFail]; passFail > 0 {
+			avg = (passFailTime / time.Duration(passFail)).Round(time.Second)
+		}
+		var oldest time.Time
+		for _, t := range activeStartTimes {
+			if oldest.IsZero() || t.Before(oldest) {
+				oldest = t
+			}
+		}
+		reporter.Status("%s, avg %s, max active %s", buf.String(), avg, TimeSince(oldest))
 	}
 loop:
 	for {
@@ -136,7 +155,21 @@ loop:
 		totalRuns++
 		counts[kind]++
 
+		// Update time stats.
+		duration := time.Since(activeStartTimes[res.id])
+		delete(activeStartTimes, res.id)
+		if kind == ResultPass || kind == ResultFail {
+			passFailTime += duration
+		}
+
 		// Save failure logs.
+		//
+		// TODO: Do we want to save success logs, too?
+		// Especially if you're not entirely sure you're
+		// testing the right thing, it can be valuable to look
+		// at these, and there can be patterns in the
+		// successes that are just as useful as patterns in
+		// failures. Maybe they should be deduped?
 		if kind != ResultPass {
 			out := res.output
 			if len(out) > 0 && out[len(out)-1] != '\n' {
@@ -169,7 +202,9 @@ loop:
 		}
 
 		// Start another process.
-		start <- struct{}{}
+		start <- startRun{id}
+		activeStartTimes[id] = time.Now()
+		id++
 	}
 	updateStatus()
 	reporter.StopStatus()
@@ -198,14 +233,14 @@ loop:
 	}
 }
 
-func (s *Stress) runner(start, stop <-chan struct{}, results chan<- result) {
-	for range start {
+func (s *Stress) runner(start <-chan startRun, stop <-chan struct{}, results chan<- result) {
+	for tok := range start {
 		// TODO: Stream output to a hidden file in s.OutDir so
 		// it's possible to see.
 		cmd, err := StartCommand(s.Command)
 		if err != nil {
 			// TODO(test): Run command that doesn't exist.
-			results <- result{nil, nil, err}
+			results <- result{tok.id, nil, nil, err}
 			continue
 		}
 
@@ -219,10 +254,10 @@ func (s *Stress) runner(start, stop <-chan struct{}, results chan<- result) {
 		case <-timeout.C:
 			cmd.Kill()
 			<-cmd.Done()
-			results <- result{cmd.Output, nil, nil}
+			results <- result{tok.id, cmd.Output, nil, nil}
 
 		case <-cmd.Done():
-			results <- result{cmd.Output, cmd.Status, nil}
+			results <- result{tok.id, cmd.Output, cmd.Status, nil}
 		}
 		timeout.Stop()
 	}

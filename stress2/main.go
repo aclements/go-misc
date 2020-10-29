@@ -37,6 +37,11 @@ The -max-* flags cause the stress tool to exit after some number of
 passes, failures, or total runs. This is useful for bisecting a known
 flaky failure.
 
+Command output is written to the directory specified by -o. Failures
+are logged to numbered files in this directory. Actively running
+commands log to ".run-NNNNNN" files and passes are logged to
+".pass-NNNNNN" files.
+
 `, os.Args[0])
 		flag.PrintDefaults()
 	}
@@ -45,7 +50,7 @@ flaky failure.
 	flag.IntVar(&s.Parallelism, "p", runtime.NumCPU(), "run `N` processes in parallel")
 	flag.DurationVar(&s.Timeout, "timeout", 10*time.Minute, "timeout each process after `duration`")
 	defaultDir := filepath.Join(os.TempDir(), time.Now().Format("stress-20060102T150405"))
-	flag.StringVar(&s.OutDir, "o", defaultDir, "output failure logs to `directory`")
+	flag.StringVar(&s.OutDir, "o", defaultDir, "write command logs to `directory`")
 	flag.Var(FlagLimit{&s.MaxRuns}, "max-runs", "exit after `N` passes+fails (but not flakes/timeouts)")
 	flag.Var(FlagLimit{&s.MaxTotalRuns}, "max-total-runs", "exit after `N` runs with any outcome")
 	flag.Var(FlagLimit{&s.MaxPasses}, "max-passes", "exit after `N` successful runs")

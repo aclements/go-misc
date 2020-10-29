@@ -5,7 +5,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -31,8 +30,6 @@ import (
 // TODO(test): Test these situations.
 
 type Command struct {
-	// Output contains the process output after the process is done.
-	Output []byte
 	// Status contains the process exit status after the process is done.
 	Status *os.ProcessState
 
@@ -47,10 +44,21 @@ type Command struct {
 	mu      sync.Mutex // Protects fields below
 	cmd     *exec.Cmd
 	sigProc *os.Process
-	outBuf  bytes.Buffer
+	out     io.Writer
 }
 
-func StartCommand(args []string) (*Command, error) {
+// StartCommand starts a managed command with the given command-line
+// arguments, with its stdout and stderr redirected to out.
+//
+// This has several differences from exec.Command:
+//
+// - This attempts to manage the entire sub-process tree.
+//
+// - Output to out will be stopped when the command completes, even if
+// sub-processes continue to write to stdout/stderr.
+//
+// - This provides a channel-based way to wait for command completion.
+func StartCommand(args []string, out io.Writer) (*Command, error) {
 	cmd := exec.Command(args[0], args[1:]...)
 
 	// Put cmd in a process group so we can signal the whole
@@ -71,9 +79,9 @@ func StartCommand(args []string) (*Command, error) {
 		Setpgid: true,
 	}
 
-	// Create a pipe. We don't use a bytes.Buffer directly because
-	// we may need to snapshot this before the write side is
-	// closed and a bytes.Buffer would race.
+	// Create a pipe. We don't use "out" directly because we may
+	// need to cut this off before the write side is actually
+	// closed by the sub-process tree.
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -100,7 +108,7 @@ func StartCommand(args []string) (*Command, error) {
 		sigProc = cmd.Process
 	}
 
-	c := &Command{waitChan: make(chan struct{}), cmd: cmd, sigProc: sigProc}
+	c := &Command{waitChan: make(chan struct{}), cmd: cmd, sigProc: sigProc, out: out}
 
 	// Start output reader.
 	c.readDone = make(chan struct{})
@@ -120,11 +128,11 @@ func (c *Command) reader(f *os.File) {
 		if n > 0 {
 			c.mu.Lock()
 			// The command can exit while sub-processes
-			// are still writing to stdout. We may have
-			// exposed the buffer, so stop adding to the
-			// buffer if that's happened.
+			// are still writing to stdout. If this
+			// happened, stop writing to the output
+			// stream.
 			if c.cmd != nil {
-				c.outBuf.Write(buf[:n])
+				c.out.Write(buf[:n])
 			}
 			c.mu.Unlock()
 		}
@@ -169,14 +177,10 @@ func (c *Command) waiter() {
 	case <-time.After(1 * time.Second):
 	}
 
+	// Signal that command has exited.
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// Gather the command's output.
-	c.Output = c.outBuf.Bytes()
 	c.Status = c.cmd.ProcessState
-
-	// Signal that command has exited.
 	c.cmd = nil
 	close(c.waitChan)
 }

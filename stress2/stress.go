@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"path"
@@ -42,7 +43,7 @@ type startRun struct {
 
 type result struct {
 	id     int64
-	output []byte
+	output *os.File
 	status *os.ProcessState // nil on timeout
 	err    error            // If non-nil, error starting command
 }
@@ -56,15 +57,15 @@ const (
 	ResultTimeout
 )
 
-func (s *Stress) resultKind(res result) ResultKind {
+func (s *Stress) resultKind(res result, output []byte) ResultKind {
 	switch {
 	case res.status == nil:
 		return ResultTimeout
 	case s.PassRe == nil && res.status.Success(),
-		s.PassRe != nil && s.PassRe.Match(res.output):
+		s.PassRe != nil && s.PassRe.Match(output):
 		return ResultPass
 	case s.FailRe == nil && res.status.ExitCode() != 125,
-		s.FailRe != nil && s.FailRe.Match(res.output):
+		s.FailRe != nil && s.FailRe.Match(output):
 		return ResultFail
 	default:
 		return ResultFlake
@@ -108,8 +109,8 @@ func (s *Stress) Run(reporter StressReporter) ResultKind {
 
 	fatal := false
 	totalRuns := 0
-	outIdx := 0
 	counts := make(map[ResultKind]int)
+	logIdxPass, logIdxFail := 0, 0
 	var passFailTime time.Duration
 	updateStatus := func() {
 		// TODO: ETA if we have s.Max*?
@@ -150,8 +151,27 @@ loop:
 			break
 		}
 
+		// Read the command output back from the log file.
+		if _, err := res.output.Seek(0, 0); err != nil {
+			log.Printf("error seeking log file: %s", err)
+			fatal = true
+			break
+		}
+		output, err := ioutil.ReadAll(res.output)
+		if err != nil {
+			log.Printf("error reading log file: %s", err)
+			fatal = true
+			break
+		}
+		logPath := res.output.Name()
+		if err := res.output.Close(); err != nil {
+			log.Printf("error saving log file: %s", err)
+			fatal = true
+			break
+		}
+
 		// Classify the result.
-		kind := s.resultKind(res)
+		kind := s.resultKind(res, output)
 		totalRuns++
 		counts[kind]++
 
@@ -162,34 +182,22 @@ loop:
 			passFailTime += duration
 		}
 
-		// Save failure logs.
-		//
-		// TODO: Do we want to save success logs, too?
-		// Especially if you're not entirely sure you're
-		// testing the right thing, it can be valuable to look
-		// at these, and there can be patterns in the
-		// successes that are just as useful as patterns in
-		// failures. Maybe they should be deduped?
+		// Save log.
+		var prefix string
+		logIdx := &logIdxFail
+		if kind == ResultPass {
+			prefix, logIdx = ".pass-", &logIdxPass
+		}
+		path, err := saveLog(s.OutDir, prefix, logIdx, logPath)
+		if err != nil {
+			log.Printf("error saving log: %s", err)
+			fatal = true
+			break
+		}
+
+		// Show failures.
 		if kind != ResultPass {
-			out := res.output
-			if len(out) > 0 && out[len(out)-1] != '\n' {
-				out = append(out, '\n')
-			}
-			if kind == ResultTimeout {
-				out = append(out, []byte("timeout\n")...)
-			} else {
-				msg := fmt.Sprintf("exited: %s\n", formatProcessState(res.status))
-				out = append(out, []byte(msg)...)
-			}
-
-			printTail(reporter, out)
-
-			path, err := saveLog(s.OutDir, &outIdx, out)
-			if err != nil {
-				log.Printf("error saving log: %s", err)
-				fatal = true
-				break
-			}
+			printTail(reporter, output)
 			fmt.Fprintf(reporter, "full output written to %s\n", path)
 		}
 
@@ -235,61 +243,80 @@ loop:
 
 func (s *Stress) runner(start <-chan startRun, stop <-chan struct{}, results chan<- result) {
 	for tok := range start {
-		// TODO: Stream output to a hidden file in s.OutDir so
-		// it's possible to see.
-		cmd, err := StartCommand(s.Command)
-		if err != nil {
-			// TODO(test): Run command that doesn't exist.
-			results <- result{tok.id, nil, nil, err}
-			continue
-		}
-
-		// Wait for cancellation, timeout, or completion.
-		timeout := time.NewTimer(s.Timeout)
-		select {
-		case <-stop:
-			cmd.Kill()
+		if !s.run1(tok, stop, results) {
 			return
-
-		case <-timeout.C:
-			cmd.Kill()
-			<-cmd.Done()
-			results <- result{tok.id, cmd.Output, nil, nil}
-
-		case <-cmd.Done():
-			results <- result{tok.id, cmd.Output, cmd.Status, nil}
 		}
-		timeout.Stop()
 	}
 }
 
-func saveLog(outDir string, idx *int, data []byte) (string, error) {
-	var name string
-	var f *os.File
-	for {
-		var err error
-		name = path.Join(outDir, fmt.Sprintf("%06d", *idx))
-		*idx++
-		f, err = os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0666)
-		if os.IsExist(err) {
-			// Try the next file name.
-			continue
+func (s *Stress) run1(tok startRun, stop <-chan struct{}, results chan<- result) bool {
+	// Open a hidden file to stream in-progress output to
+	// so the user can see it.
+	name := path.Join(s.OutDir, fmt.Sprintf(".run-%06d", tok.id))
+	f, err := os.Create(name)
+	if err != nil {
+		results <- result{tok.id, nil, nil, err}
+		return true
+	}
+	deleteFile := true
+	defer func() {
+		if deleteFile {
+			f.Close()
+			os.Remove(name)
 		}
-		if err != nil {
-			return "", err
-		}
-		break
+	}()
+
+	// Start command.
+	cmd, err := StartCommand(s.Command, f)
+	if err != nil {
+		// TODO(test): Run command that doesn't exist.
+		results <- result{id: tok.id, err: err}
+		return true
 	}
 
-	_, err := f.Write(data)
-	if err == nil {
-		err = f.Close()
+	// Wait for cancellation, timeout, or completion.
+	timeout := time.NewTimer(s.Timeout)
+	select {
+	case <-stop:
+		cmd.Kill()
+		// Stop the runner loop
+		return false
+
+	case <-timeout.C:
+		cmd.Kill()
+		<-cmd.Done()
+		fmt.Fprintf(f, "timeout after %s\n", s.Timeout)
+		deleteFile = false
+		results <- result{id: tok.id, output: f}
+
+	case <-cmd.Done():
+		if !cmd.Status.Success() {
+			fmt.Fprintf(f, "exited: %s\n", formatProcessState(cmd.Status))
+		}
+		deleteFile = false
+		results <- result{id: tok.id, output: f, status: cmd.Status}
 	}
-	if err != nil {
-		f.Close()
-		os.Remove(name)
-		return "", err
+	timeout.Stop()
+	return true
+}
+
+func saveLog(outDir, prefix string, idx *int, oldName string) (string, error) {
+	var name string
+	for {
+		name = path.Join(outDir, fmt.Sprintf("%s%06d", prefix, *idx))
+		*idx++
+		err := os.Link(oldName, name)
+		if err == nil {
+			// Found a name.
+			break
+		} else if !os.IsExist(err) {
+			return "", err
+		}
+		// Name already exists. Try the next index.
 	}
+
+	// Delete the old name.
+	os.Remove(oldName)
 	return name, nil
 }
 

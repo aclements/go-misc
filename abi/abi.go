@@ -32,7 +32,7 @@ const (
 	maxFloatRegs = 8
 
 	// Comparison mode.
-	modeCompare = true
+	modeCompare = false
 )
 
 func main() {
@@ -93,6 +93,7 @@ func main() {
 		OneArray:    true,
 		SplitArrays: false,
 		IgnoreBlank: true,
+		SpillRegs:   false,
 	}
 	cmp := opts
 	cmp.ABI0 = true
@@ -186,11 +187,13 @@ type ABIOptions struct {
 	OneArray    bool // Size-1 arrays don't stack-assign
 	SplitArrays bool // Stack-assign arrays separately from rest of arg
 	IgnoreBlank bool // Skip assigning blank fields
+	SpillRegs   bool // Structure spill space as register words
 }
 
 type frameBuilder struct {
-	opts  *ABIOptions
-	sizes types.Sizes
+	opts    *ABIOptions
+	sizes   types.Sizes
+	ptrSize int
 
 	ints, floats int
 
@@ -207,26 +210,26 @@ type Frame struct {
 }
 
 func (a *ABIOptions) Assign(sig *types.Signature, sizes types.Sizes) Frame {
-	f := frameBuilder{opts: a, sizes: sizes}
 	ptrSize := int(sizes.Sizeof(types.Typ[types.Uintptr]))
+	f := frameBuilder{opts: a, sizes: sizes, ptrSize: ptrSize}
 
 	// Arguments
 	if r := sig.Recv(); r != nil {
-		f.AddArg(r.Type())
+		f.AddArg(r.Type(), true)
 	}
 	ps := sig.Params()
 	for i := 0; i < ps.Len(); i++ {
-		f.AddArg(ps.At(i).Type())
+		f.AddArg(ps.At(i).Type(), true)
 	}
 	f.ArgInts, f.ArgFloats = f.ints, f.floats
 	f.StackBytes = align(f.StackBytes, ptrSize)
-	f.StackSpillBytes = f.ints*ptrSize + f.floats*8
+	f.StackSpillBytes = align(f.StackSpillBytes, ptrSize)
 
 	// Results
 	f.ints, f.floats = 0, 0
 	rs := sig.Results()
 	for i := 0; i < rs.Len(); i++ {
-		f.AddArg(rs.At(i).Type())
+		f.AddArg(rs.At(i).Type(), false)
 	}
 	f.StackBytes = align(f.StackBytes, ptrSize)
 	f.ResInts, f.ResFloats = f.ints, f.floats
@@ -236,14 +239,24 @@ func (a *ABIOptions) Assign(sig *types.Signature, sizes types.Sizes) Frame {
 	return f.Frame
 }
 
-func (f *frameBuilder) AddArg(arg types.Type) {
+func (f *frameBuilder) AddArg(arg types.Type, needsSpill bool) {
 	if f.opts.ABI0 {
 		f.StackAssign(arg)
 		return
 	}
 
 	si, sf, sb := f.ints, f.floats, f.StackBytes
-	if !f.RegAssign(arg, true) {
+	if f.RegAssign(arg, true) {
+		if needsSpill {
+			// Assign spill space.
+			if f.opts.SpillRegs {
+				f.StackSpillBytes += (f.ints-si)*f.ptrSize + (f.floats-sf)*8
+			} else {
+				f.StackSpillBytes = align(f.StackSpillBytes, int(f.sizes.Alignof(arg)))
+				f.StackSpillBytes += int(f.sizes.Sizeof(arg))
+			}
+		}
+	} else {
 		// Stack-assign the whole thing.
 		f.ints, f.floats, f.StackBytes = si, sf, sb
 		f.StackAssign(arg)

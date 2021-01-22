@@ -92,7 +92,7 @@ func main() {
 		EmptyArray:  true,
 		OneArray:    true,
 		SplitArrays: false,
-		IgnoreBlank: true,
+		IgnoreBlank: false,
 		SpillRegs:   false,
 	}
 	cmp := opts
@@ -107,7 +107,7 @@ func main() {
 		fit := 0            // # functions that fit entirely in registers
 		cmpFit := 0
 		cmpDiff := 0   // # functions with any frame difference
-		cmpLarger := 0 // # functions with larger stack frames
+		cmpLarger := 0 // # functions with larger stack frames in cmp
 
 		for _, f := range funcs {
 			sig := f.Type().(*types.Signature)

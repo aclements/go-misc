@@ -89,11 +89,12 @@ func main() {
 		}
 	}
 	opts := ABIOptions{
-		EmptyArray:  true,
-		OneArray:    true,
-		SplitArrays: false,
-		IgnoreBlank: false,
-		SpillRegs:   false,
+		EmptyArray:   true,
+		OneArray:     true,
+		SplitArrays:  false,
+		IgnoreBlank:  false,
+		SpillRegs:    false,
+		EmptyOnStack: true,
 	}
 	cmp := opts
 	cmp.ABI0 = true
@@ -183,11 +184,12 @@ type ABIOptions struct {
 
 	ABI0 bool // Use ABI0 (other options are ignored)
 
-	EmptyArray  bool // Empty arrays don't stack-assign
-	OneArray    bool // Size-1 arrays don't stack-assign
-	SplitArrays bool // Stack-assign arrays separately from rest of arg
-	IgnoreBlank bool // Skip assigning blank fields
-	SpillRegs   bool // Structure spill space as register words
+	EmptyArray   bool // Empty arrays don't stack-assign
+	OneArray     bool // Size-1 arrays don't stack-assign
+	SplitArrays  bool // Stack-assign arrays separately from rest of arg
+	IgnoreBlank  bool // Skip assigning blank fields
+	SpillRegs    bool // Structure spill space as register words
+	EmptyOnStack bool // Stack-assign zero-sized values
 }
 
 type frameBuilder struct {

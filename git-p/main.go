@@ -81,15 +81,27 @@ const (
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [branches...]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "With no arguments, list branches from newest to oldest.\n\n")
+		fmt.Fprintf(os.Stderr, "With no arguments, list the current branch.\n\n")
 		flag.PrintDefaults()
 	}
 	defIgnore, _ := tryGit("config", "p.ignore")
 	flagIgnore := flag.String("ignore", defIgnore, "ignore branches matching shell `pattern` [git config p.ignore]")
 	flagLocal := flag.Bool("l", false, "local state only; don't query Gerrit")
+	flagAll := flag.Bool("a", false, "list all branches from newest to oldest")
 	flag.Parse()
 	branches := flag.Args()
 	ignores := strings.Fields(*flagIgnore)
+
+	if *flagAll {
+		if len(branches) != 0 {
+			fmt.Fprintf(os.Stderr, "cannot use both -a and branches\n")
+			os.Exit(1)
+		}
+	} else {
+		if len(branches) == 0 {
+			branches = []string{"HEAD"}
+		}
+	}
 
 	// Check the branch names.
 	for _, b := range branches {

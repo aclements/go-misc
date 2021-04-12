@@ -63,10 +63,9 @@ func setupPager() (inTerm bool) {
 	w.Close()
 	syscall.Dup2(int(r.Fd()), 0)
 	r.Close()
-	if os.Getenv("LESS") == "" {
-		// We need -R at least to interpret color codes.
-		os.Setenv("LESS", "FRX")
-	}
+	// We need -R at least to interpret color codes.
+	// Add -F so single-screen output doesn't invoke paging.
+	os.Setenv("LESS", "-FR "+os.Getenv("LESS"))
 	if os.Getenv("LV") == "" {
 		os.Setenv("LV", "-c")
 	}

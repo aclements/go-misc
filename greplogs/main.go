@@ -17,6 +17,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -24,6 +25,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aclements/go-misc/internal/loganal"
 )
@@ -48,6 +50,7 @@ var (
 	flagColor     = flag.String("color", "auto", "highlight output in color: `mode` is never, always, or auto")
 
 	color *colorizer
+	since timeFlag
 )
 
 const (
@@ -61,6 +64,7 @@ func main() {
 	// logs and have it extract the failures.
 	flag.Var(&fileRegexps, "e", "show files matching `regexp`; if provided multiple times, files must match all regexps")
 	flag.Var(&failRegexps, "E", "show only errors matching `regexp`; if provided multiple times, an error must match all regexps")
+	flag.Var(&since, "since", "list only failures on revisions since this date, as an RFC-3339 date or date-time")
 	flag.Parse()
 
 	// Validate flags.
@@ -134,6 +138,31 @@ func main() {
 }
 
 func process(path, nicePath string) (found bool, err error) {
+	// If this is from the dashboard, filter by date and get the builder URL.
+	var logURL string
+	if rawRev, err := ioutil.ReadFile(filepath.Join(filepath.Dir(path), ".rev.json")); err == nil {
+		// A BuildRevision is a structured subset of a
+		// golang.org/x/build/types.BuildRevision
+		type BuildRevision struct {
+			Date time.Time `json:",omitempty"`
+		}
+
+		var rev BuildRevision
+		if err := json.Unmarshal(rawRev, &rev); err != nil {
+			return false, err
+		}
+		if !rev.Date.IsZero() && rev.Date.Before(since.Time) {
+			return false, nil
+		}
+
+		// TODO: Get the URL from the rev.json metadata
+		link, err := os.Readlink(path)
+		if err == nil {
+			hash := filepath.Base(link)
+			logURL = "https://build.golang.org/log/" + hash
+		}
+	}
+
 	// TODO: Use streaming if possible.
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
@@ -143,17 +172,6 @@ func process(path, nicePath string) (found bool, err error) {
 	// Check regexp match.
 	if !fileRegexps.AllMatch(data) || !failRegexps.AllMatch(data) {
 		return false, nil
-	}
-
-	// If this is from the dashboard, get the builder URL.
-	var logURL string
-	if _, err := os.Stat(filepath.Join(filepath.Dir(path), ".rev.json")); err == nil {
-		// TODO: Get the URL from the rev.json metadata
-		link, err := os.Readlink(path)
-		if err == nil {
-			hash := filepath.Base(link)
-			logURL = "https://build.golang.org/log/" + hash
-		}
 	}
 
 	printPath := nicePath

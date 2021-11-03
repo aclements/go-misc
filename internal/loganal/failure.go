@@ -76,7 +76,13 @@ func (f Failure) String() string {
 var (
 	linesStar = `(?:.*\n)*?`
 	linesPlus = `(?:.*\n)+?`
-	failPkg   = `(?m:^FAIL[ \t]+(\S+))`
+
+	// failPkg matches the FAIL line for a package.
+	//
+	// In case of failure the Android wrapper prints "exitcode=1" without a newline,
+	// so for logs prior to the fix for https://golang.org/issue/49317 we need to
+	// strip that from the beginning of the line.
+	failPkg = `(?m:^(?:exitcode=1)?FAIL[ \t]+(\S+))`
 
 	canonLine = regexp.MustCompile(`\r+\n`)
 

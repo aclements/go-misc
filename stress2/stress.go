@@ -110,7 +110,7 @@ func (s *Stress) Run(reporter StressReporter) ResultKind {
 	fatal := false
 	totalRuns := 0
 	counts := make(map[ResultKind]int)
-	logIdxPass, logIdxFail := 0, 0
+	logIdxPass, logIdxFail, logIdxFlake := 0, 0, 0
 	var passFailTime time.Duration
 	updateStatus := func() {
 		// TODO: ETA if we have s.Max*?
@@ -184,9 +184,16 @@ loop:
 
 		// Save log.
 		var prefix string
-		logIdx := &logIdxFail
-		if kind == ResultPass {
+		var logIdx *int
+		switch kind {
+		default:
+			panic("bad kind")
+		case ResultPass:
 			prefix, logIdx = ".pass-", &logIdxPass
+		case ResultFail, ResultTimeout:
+			prefix, logIdx = "", &logIdxFail
+		case ResultFlake:
+			prefix, logIdx = "flake-", &logIdxFlake
 		}
 		path, err := saveLog(s.OutDir, prefix, logIdx, logPath)
 		if err != nil {

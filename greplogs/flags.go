@@ -42,6 +42,15 @@ func (x *regexpList) AllMatch(data []byte) bool {
 	return true
 }
 
+func (x *regexpList) AnyMatchString(data string) bool {
+	for _, r := range *x {
+		if r.MatchString(data) {
+			return true
+		}
+	}
+	return false
+}
+
 func (x *regexpList) Matches(data []byte) [][]int {
 	matches := [][]int{}
 	for _, r := range *x {

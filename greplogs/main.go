@@ -43,6 +43,7 @@ import (
 var (
 	fileRegexps regexpList
 	failRegexps regexpList
+	omit        regexpList
 
 	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
 	flagMD        = flag.Bool("md", false, "output in Markdown")
@@ -64,6 +65,7 @@ func main() {
 	// logs and have it extract the failures.
 	flag.Var(&fileRegexps, "e", "show files matching `regexp`; if provided multiple times, files must match all regexps")
 	flag.Var(&failRegexps, "E", "show only errors matching `regexp`; if provided multiple times, an error must match all regexps")
+	flag.Var(&omit, "omit", "omit results for builder names matching `regexp`; if provided multiple times, builders matching any regexp are omitted")
 	flag.Var(&since, "since", "list only failures on revisions since this date, as an RFC-3339 date or date-time")
 	flag.Parse()
 
@@ -138,7 +140,12 @@ func main() {
 }
 
 func process(path, nicePath string) (found bool, err error) {
-	// If this is from the dashboard, filter by date and get the builder URL.
+	// If this is from the dashboard, filter by builder and date and get the builder URL.
+	builder := filepath.Base(nicePath)
+	if omit.AnyMatchString(builder) {
+		return false, nil
+	}
+
 	var logURL string
 	if rawRev, err := ioutil.ReadFile(filepath.Join(filepath.Dir(path), ".rev.json")); err == nil {
 		// A BuildRevision is a structured subset of a

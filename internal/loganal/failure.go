@@ -84,6 +84,11 @@ var (
 	// strip that from the beginning of the line.
 	failPkg = `(?m:^(?:exitcode=1)?FAIL[ \t]+(\S+))`
 
+	// logTruncated matches the "log truncated" line injected by the coordinator.
+	logTruncated = `(?:\n\.\.\. log truncated \.\.\.)`
+
+	endOfTest = `(?:` + failPkg + `|` + logTruncated + `)`
+
 	canonLine = regexp.MustCompile(`\r+\n`)
 
 	// testingHeader matches the beginning of the go test std
@@ -98,7 +103,7 @@ var (
 	// T.Error or a recovered panic. There was a time when the
 	// test name included GOMAXPROCS (like how benchmark names
 	// do), so we strip that out.
-	testingFailed = regexp.MustCompile(`^--- FAIL: ([^-\s]+).*\n(` + linesStar + `)` + failPkg)
+	testingFailed = regexp.MustCompile(`^--- FAIL: ([^-\s]+).*\n(` + linesStar + `)` + endOfTest)
 
 	// testingError matches the file name and message of the last
 	// T.Error in a testingFailed log.
@@ -109,16 +114,16 @@ var (
 	testingPanic = regexp.MustCompile(`panic: (.*?)(?: \[recovered\])`)
 
 	// gotestFailed matches a $GOROOT/test failure.
-	gotestFailed = regexp.MustCompile(`^# go run run\.go.*\n(` + linesPlus + `)` + failPkg)
+	gotestFailed = regexp.MustCompile(`^# go run run\.go.*\n(` + linesPlus + `)` + endOfTest)
 
 	// buildFailed matches build failures from the testing package.
 	buildFailed = regexp.MustCompile(`^` + failPkg + `\s+\[build failed\]`)
 
 	// timeoutPanic1 matches a test timeout detected by the testing package.
-	timeoutPanic1 = regexp.MustCompile(`^panic: test timed out after .*\n(` + linesStar + `)` + failPkg)
+	timeoutPanic1 = regexp.MustCompile(`^panic: test timed out after .*\n(` + linesStar + `)` + endOfTest)
 
 	// timeoutPanic2 matches a test timeout detected by go test.
-	timeoutPanic2 = regexp.MustCompile(`^\*\*\* Test killed.*ran too long\n` + failPkg)
+	timeoutPanic2 = regexp.MustCompile(`^\*\*\* Test killed.*ran too long\n` + endOfTest)
 
 	// coordinatorTimeout matches a test timeout detected by the
 	// coordinator, for both non-sharded and sharded tests.
@@ -138,7 +143,7 @@ var (
 	// throw.
 	runtimeFailed        = regexp.MustCompile(`^(?:runtime:.*\n)*.*(?:panic: |fatal error: )(.*)`)
 	runtimeLiterals      = []string{"runtime:", "panic:", "fatal error:"}
-	runtimeFailedTrailer = regexp.MustCompile(`^(?:exit status.*\n)?(?:\*\*\* Test killed.*\n)?(?:` + failPkg + `)?`)
+	runtimeFailedTrailer = regexp.MustCompile(`^(?:exit status.*\n)?(?:\*\*\* Test killed.*\n)?` + endOfTest + `?`)
 
 	// apiCheckerFailed matches an API checker failure.
 	apiCheckerFailed = regexp.MustCompile(`^Error running API checker: (.*)`)
@@ -149,7 +154,7 @@ var (
 
 	// testingUnknownFailed matches the last line of some unknown
 	// failure detected by the testing package.
-	testingUnknownFailed = regexp.MustCompile(`^` + failPkg)
+	testingUnknownFailed = regexp.MustCompile(`^` + endOfTest)
 
 	// miscFailed matches the log.Fatalf in go tool dist test when
 	// a test fails. We use this as a last resort, mostly to pick

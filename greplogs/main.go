@@ -23,6 +23,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -158,7 +159,7 @@ func process(path, nicePath string) (found bool, err error) {
 		if err := json.Unmarshal(rawRev, &rev); err != nil {
 			return false, err
 		}
-		if !rev.Date.IsZero() && rev.Date.Before(since.Time) {
+		if !since.Time.IsZero() && rev.Date.Before(since.Time) {
 			return false, nil
 		}
 
@@ -168,6 +169,9 @@ func process(path, nicePath string) (found bool, err error) {
 			hash := filepath.Base(link)
 			logURL = "https://build.golang.org/log/" + hash
 		}
+	} else if !since.Time.IsZero() {
+		// Without revision metadata we can't filter by date.
+		return false, err
 	}
 
 	// TODO: Use streaming if possible.
@@ -191,11 +195,18 @@ func process(path, nicePath string) (found bool, err error) {
 		return true, nil
 	}
 
+	timer := time.AfterFunc(30*time.Second, func() {
+		debug.SetTraceback("all")
+		panic("stuck in extracting " + path)
+	})
+
 	// Extract failures.
 	failures, err := loganal.Extract(string(data), "", "")
 	if err != nil {
 		return false, err
 	}
+
+	timer.Stop()
 
 	// Print failures.
 	for _, failure := range failures {

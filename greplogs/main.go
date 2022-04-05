@@ -17,12 +17,12 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -51,8 +51,8 @@ var (
 	flagFilesOnly = flag.Bool("l", false, "print only names of matching files")
 	flagColor     = flag.String("color", "auto", "highlight output in color: `mode` is never, always, or auto")
 
-	color *colorizer
-	since timeFlag
+	color         *colorizer
+	since, before timeFlag
 )
 
 const (
@@ -68,6 +68,7 @@ func main() {
 	flag.Var(&failRegexps, "E", "show only errors matching `regexp`; if provided multiple times, an error must match all regexps")
 	flag.Var(&omit, "omit", "omit results for builder names matching `regexp`; if provided multiple times, builders matching any regexp are omitted")
 	flag.Var(&since, "since", "list only failures on revisions since this date, as an RFC-3339 date or date-time")
+	flag.Var(&before, "before", "list only failures on revisions before this date, in the same format as -since")
 	flag.Parse()
 
 	// Validate flags.
@@ -140,6 +141,8 @@ func main() {
 	os.Exit(status)
 }
 
+var pathDateRE = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})-[0-9a-f]+(?:-[0-9a-f]+)?$`)
+
 func process(path, nicePath string) (found bool, err error) {
 	// If this is from the dashboard, filter by builder and date and get the builder URL.
 	builder := filepath.Base(nicePath)
@@ -147,31 +150,31 @@ func process(path, nicePath string) (found bool, err error) {
 		return false, nil
 	}
 
-	var logURL string
-	if rawRev, err := ioutil.ReadFile(filepath.Join(filepath.Dir(path), ".rev.json")); err == nil {
-		// A BuildRevision is a structured subset of a
-		// golang.org/x/build/types.BuildRevision
-		type BuildRevision struct {
-			Date time.Time `json:",omitempty"`
+	if !since.Time.IsZero() || !before.Time.IsZero() {
+		revDir := filepath.Dir(nicePath)
+		revDirBase := filepath.Base(revDir)
+		match := pathDateRE.FindStringSubmatch(revDirBase)
+		if len(match) != 2 {
+			// Without a valid log date we can't filter by it.
+			return false, fmt.Errorf("timestamp not found in rev dir name: %q", revDirBase)
 		}
-
-		var rev BuildRevision
-		if err := json.Unmarshal(rawRev, &rev); err != nil {
+		revTime, err := time.Parse("2006-01-02T15:04:05", match[1])
+		if err != nil {
 			return false, err
 		}
-		if !since.Time.IsZero() && rev.Date.Before(since.Time) {
+		if !since.Time.IsZero() && revTime.Before(since.Time) {
 			return false, nil
 		}
-
-		// TODO: Get the URL from the rev.json metadata
-		link, err := os.Readlink(path)
-		if err == nil {
-			hash := filepath.Base(link)
-			logURL = "https://build.golang.org/log/" + hash
+		if !before.Time.IsZero() && !revTime.Before(before.Time) {
+			return false, nil
 		}
-	} else if !since.Time.IsZero() {
-		// Without revision metadata we can't filter by date.
-		return false, err
+	}
+
+	// TODO: Get the URL from the rev.json metadata
+	var logURL string
+	if link, err := os.Readlink(path); err == nil {
+		hash := filepath.Base(link)
+		logURL = "https://build.golang.org/log/" + hash
 	}
 
 	// TODO: Use streaming if possible.

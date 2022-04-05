@@ -133,7 +133,9 @@ var (
 	// function/line number entry in a traceback. Group 1 matches
 	// the fully qualified function name. Groups 2 and 3 match the
 	// file name and line number.
-	tbEntry = `(\S+)\(.*\)\n\t(.*):([0-9]+) .*\n`
+	// Most entries have trailing stack metadata for each frame,
+	// but inlined calls, lacking a frame, may omit that metadata.
+	tbEntry = `(\S+)\(.*\)\n\t(.*):([0-9]+)(?: .*)?\n`
 
 	// runtimeFailed matches a runtime throw or testing package
 	// panic. Matching the panic is fairly loose because in some

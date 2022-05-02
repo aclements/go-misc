@@ -46,8 +46,8 @@ var (
 	failRegexps regexpList
 	omit        regexpList
 
-	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
-	flagMD        = flag.Bool("md", false, "output in Markdown")
+	flagDashboard = flag.Bool("dashboard", true, "search dashboard logs from fetchlogs")
+	flagMD        = flag.Bool("md", true, "output in Markdown")
 	flagFilesOnly = flag.Bool("l", false, "print only names of matching files")
 	flagColor     = flag.String("color", "auto", "highlight output in color: `mode` is never, always, or auto")
 

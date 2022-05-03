@@ -50,6 +50,7 @@ var (
 	flagDashboard = flag.Bool("dashboard", true, "search dashboard logs from fetchlogs")
 	flagMD        = flag.Bool("md", true, "output in Markdown")
 	flagTriage    = flag.Bool("triage", false, "adjust Markdown output for failure triage")
+	flagDetails   = flag.Bool("details", false, "surround Markdown results in a <details> tag")
 	flagFilesOnly = flag.Bool("l", false, "print only names of matching files")
 	flagColor     = flag.String("color", "auto", "highlight output in color: `mode` is never, always, or auto")
 
@@ -98,8 +99,14 @@ func main() {
 		args := append([]string{filepath.Base(os.Args[0])}, os.Args[1:]...)
 		fmt.Printf("`%s`\n", shellquote.Join(args...))
 
-		if *flagTriage {
-			defer func() { fmt.Printf("\n(%d matching logs)\n", numMatching) }()
+		defer func() {
+			if numMatching == 0 || *flagTriage || *flagDetails {
+				fmt.Printf("\n(%d matching logs)\n", numMatching)
+			}
+		}()
+		if *flagDetails {
+			os.Stdout.WriteString("<details>\n\n")
+			defer os.Stdout.WriteString("\n</details>\n")
 		}
 	}
 

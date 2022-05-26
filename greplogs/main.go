@@ -64,6 +64,8 @@ const (
 	colorMatch     = colorBold | colorFgRed
 )
 
+var brokenBuilders []string
+
 func main() {
 	// XXX What I want right now is just to point it at a bunch of
 	// logs and have it extract the failures.
@@ -89,6 +91,28 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "-color must be one of never, always, or auto")
 		os.Exit(2)
+	}
+
+	if *flagTriage {
+		*flagFilesOnly = true
+		if len(failRegexps) == 0 && len(fileRegexps) == 0 {
+			failRegexps.Set(".")
+		}
+
+		if before.Time.IsZero() {
+			year, month, day := time.Now().UTC().Date()
+			before = timeFlag{Time: time.Date(year, month, day, 0, 0, 0, 0, time.UTC)}
+		}
+
+		var err error
+		brokenBuilders, err = listBrokenBuilders()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if len(brokenBuilders) > 0 {
+			fmt.Fprintf(os.Stderr, "omitting builders with known issues:\n\t%s\n\n", strings.Join(brokenBuilders, "\n\t"))
+		}
 	}
 
 	status := 1
@@ -169,6 +193,11 @@ var pathDateRE = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})-([0-
 func process(path, nicePath string) (found bool, err error) {
 	// If this is from the dashboard, filter by builder and date and get the builder URL.
 	builder := filepath.Base(nicePath)
+	for _, b := range brokenBuilders {
+		if builder == b {
+			return false, nil
+		}
+	}
 	if omit.AnyMatchString(builder) {
 		return false, nil
 	}

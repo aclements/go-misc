@@ -5,6 +5,7 @@ go 1.17
 require (
 	github.com/aclements/go-gg v0.0.0-20170323211221-abd1f791f5ee
 	github.com/aclements/go-moremath v0.0.0-20210112150236-f10218a38794
+	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	golang.org/x/build v0.0.0-20210804225706-d1bc548deb19
 	golang.org/x/crypto v0.0.0-20210711020723-a769d52b0f97
 	golang.org/x/image v0.0.0-20210628002857-a66eb6448b8d

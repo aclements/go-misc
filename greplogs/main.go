@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/aclements/go-misc/internal/loganal"
+	"github.com/kballard/go-shellquote"
 )
 
 // TODO: If searching dashboard logs, optionally print to builder URLs
@@ -46,8 +47,10 @@ var (
 	failRegexps regexpList
 	omit        regexpList
 
-	flagDashboard = flag.Bool("dashboard", false, "search dashboard logs from fetchlogs")
-	flagMD        = flag.Bool("md", false, "output in Markdown")
+	flagDashboard = flag.Bool("dashboard", true, "search dashboard logs from fetchlogs")
+	flagMD        = flag.Bool("md", true, "output in Markdown")
+	flagTriage    = flag.Bool("triage", false, "adjust Markdown output for failure triage")
+	flagDetails   = flag.Bool("details", false, "surround Markdown results in a <details> tag")
 	flagFilesOnly = flag.Bool("l", false, "print only names of matching files")
 	flagColor     = flag.String("color", "auto", "highlight output in color: `mode` is never, always, or auto")
 
@@ -61,12 +64,14 @@ const (
 	colorMatch     = colorBold | colorFgRed
 )
 
+var brokenBuilders []string
+
 func main() {
 	// XXX What I want right now is just to point it at a bunch of
 	// logs and have it extract the failures.
 	flag.Var(&fileRegexps, "e", "show files matching `regexp`; if provided multiple times, files must match all regexps")
 	flag.Var(&failRegexps, "E", "show only errors matching `regexp`; if provided multiple times, an error must match all regexps")
-	flag.Var(&omit, "omit", "omit results for builder names matching `regexp`; if provided multiple times, builders matching any regexp are omitted")
+	flag.Var(&omit, "omit", "omit results for builder names and/or revisions matching `regexp`; if provided multiple times, logs matching any regexp are omitted")
 	flag.Var(&since, "since", "list only failures on revisions since this date, as an RFC-3339 date or date-time")
 	flag.Var(&before, "before", "list only failures on revisions before this date, in the same format as -since")
 	flag.Parse()
@@ -86,6 +91,47 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "-color must be one of never, always, or auto")
 		os.Exit(2)
+	}
+
+	if *flagTriage {
+		*flagFilesOnly = true
+		if len(failRegexps) == 0 && len(fileRegexps) == 0 {
+			failRegexps.Set(".")
+		}
+
+		if before.Time.IsZero() {
+			year, month, day := time.Now().UTC().Date()
+			before = timeFlag{Time: time.Date(year, month, day, 0, 0, 0, 0, time.UTC)}
+		}
+
+		var err error
+		brokenBuilders, err = listBrokenBuilders()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if len(brokenBuilders) > 0 {
+			fmt.Fprintf(os.Stderr, "omitting builders with known issues:\n\t%s\n\n", strings.Join(brokenBuilders, "\n\t"))
+		}
+	}
+
+	status := 1
+	defer func() { os.Exit(status) }()
+
+	numMatching := 0
+	if *flagMD {
+		args := append([]string{filepath.Base(os.Args[0])}, os.Args[1:]...)
+		fmt.Printf("`%s`\n", shellquote.Join(args...))
+
+		defer func() {
+			if numMatching == 0 || *flagTriage || *flagDetails {
+				fmt.Printf("\n(%d matching logs)\n", numMatching)
+			}
+		}()
+		if *flagDetails {
+			os.Stdout.WriteString("<details>\n\n")
+			defer os.Stdout.WriteString("\n</details>\n")
+		}
 	}
 
 	// Gather paths.
@@ -111,7 +157,6 @@ func main() {
 	}
 
 	// Process files
-	status := 1
 	for _, path := range paths {
 		filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -132,20 +177,27 @@ func main() {
 			if err != nil {
 				status = 2
 				fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
-			} else if found && status == 1 {
-				status = 0
+			} else if found {
+				numMatching++
+				if status == 1 {
+					status = 0
+				}
 			}
 			return nil
 		})
 	}
-	os.Exit(status)
 }
 
-var pathDateRE = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})-[0-9a-f]+(?:-[0-9a-f]+)?$`)
+var pathDateRE = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})-([0-9a-f]+(?:-[0-9a-f]+)?)$`)
 
 func process(path, nicePath string) (found bool, err error) {
 	// If this is from the dashboard, filter by builder and date and get the builder URL.
 	builder := filepath.Base(nicePath)
+	for _, b := range brokenBuilders {
+		if builder == b {
+			return false, nil
+		}
+	}
 	if omit.AnyMatchString(builder) {
 		return false, nil
 	}
@@ -154,9 +206,12 @@ func process(path, nicePath string) (found bool, err error) {
 		revDir := filepath.Dir(nicePath)
 		revDirBase := filepath.Base(revDir)
 		match := pathDateRE.FindStringSubmatch(revDirBase)
-		if len(match) != 2 {
+		if len(match) != 3 {
 			// Without a valid log date we can't filter by it.
 			return false, fmt.Errorf("timestamp not found in rev dir name: %q", revDirBase)
+		}
+		if omit.AnyMatchString(match[2]) {
+			return false, nil
 		}
 		revTime, err := time.Parse("2006-01-02T15:04:05", match[1])
 		if err != nil {
@@ -190,7 +245,11 @@ func process(path, nicePath string) (found bool, err error) {
 
 	printPath := nicePath
 	if *flagMD && logURL != "" {
-		printPath = fmt.Sprintf("[%s](%s)", nicePath, logURL)
+		prefix := ""
+		if *flagTriage {
+			prefix = "- [ ] "
+		}
+		printPath = fmt.Sprintf("%s[%s](%s)", prefix, nicePath, logURL)
 	}
 
 	if *flagFilesOnly {

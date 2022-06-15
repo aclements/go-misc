@@ -7,62 +7,17 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"html"
 	"image"
 	"image/color"
 	"image/png"
-	"io/ioutil"
 	"log"
-	"os"
-	"path/filepath"
-	"regexp"
 	"sort"
-	"sync"
-	"time"
 )
 
 var since timeFlag
-
-type rev struct {
-	path string
-	date time.Time
-
-	metaOnce sync.Once
-	meta     revMeta
-	builders []string
-}
-
-type revMeta struct {
-	Repo    string   `json:"repo"`
-	Results []string `json:"results"`
-}
-
-func (r *rev) getMeta() (m revMeta, builders []string) {
-	r.metaOnce.Do(func() {
-		path := filepath.Join(r.path, ".rev.json")
-		b, err := ioutil.ReadFile(path)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err = json.Unmarshal(b, &r.meta); err != nil {
-			log.Fatalf("decoding %s: %s", path, err)
-		}
-
-		path = filepath.Join(r.path, ".builders.json")
-		b, err = ioutil.ReadFile(path)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err = json.Unmarshal(b, &r.builders); err != nil {
-			log.Fatalf("decoding %s: %s", path, err)
-		}
-	})
-
-	return r.meta, r.builders
-}
 
 type stat struct {
 	label string
@@ -98,11 +53,11 @@ func main() {
 	stats := make(map[string]*stat)
 	var allStats []*stat
 	for _, rev := range revs {
-		meta, builders := rev.getMeta()
+		meta := rev.getMeta()
 		if meta.Repo != "go" {
 			continue
 		}
-		for _, b := range builders {
+		for _, b := range meta.Builders {
 			if stats[b] == nil {
 				s := &stat{label: b}
 				stats[b] = s
@@ -112,9 +67,9 @@ func main() {
 	}
 
 	for _, rev := range revs {
-		m, builders := rev.getMeta()
+		m := rev.getMeta()
 		bmap := make(map[string]string)
-		for i, builder := range builders {
+		for i, builder := range m.Builders {
 			bmap[builder] = m.Results[i]
 		}
 
@@ -152,45 +107,6 @@ func main() {
 	}
 	fmt.Printf("</table>\n")
 	fmt.Printf("</body></html>\n")
-}
-
-var pathDateRe = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})-[0-9a-f]+$`)
-
-func getRevs(since time.Time) []*rev {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		log.Fatal("getting cache directory: ", err)
-	}
-	revDir := filepath.Join(cacheDir, "fetchlogs", "rev")
-	dirs, err := os.ReadDir(revDir)
-	if err != nil {
-		log.Fatalf("reading rev directory %s: %s", revDir, err)
-	}
-
-	var matches []*rev
-	for _, dir := range dirs {
-		if !dir.IsDir() {
-			continue
-		}
-		name := dir.Name()
-		m := pathDateRe.FindStringSubmatch(name)
-		if m == nil {
-			continue
-		}
-		t, err := time.Parse(rfc3339DateTime, m[1])
-		if err != nil {
-			continue
-		}
-		if t.Before(since) {
-			continue
-		}
-		matches = append(matches, &rev{
-			path: filepath.Join(revDir, name),
-			date: t,
-		})
-	}
-
-	return matches
 }
 
 func trueRuns(xs []bool) []int {

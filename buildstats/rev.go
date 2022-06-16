@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -37,7 +38,8 @@ func getRevs(since time.Time) []*rev {
 	}
 
 	var matches []*rev
-	for _, dir := range dirs {
+	for i, dir := range dirs {
+		fmt.Fprintf(os.Stderr, "\rLoading rev %d/%d...", i+1, len(dirs))
 		if !dir.IsDir() {
 			continue
 		}
@@ -58,8 +60,13 @@ func getRevs(since time.Time) []*rev {
 			date: t,
 		})
 	}
+	fmt.Fprintf(os.Stderr, "\n")
 
 	return matches
+}
+
+func (r *rev) String() string {
+	return r.path
 }
 
 type revMeta struct {

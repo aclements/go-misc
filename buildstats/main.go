@@ -14,7 +14,6 @@ import (
 	"image/color"
 	"image/png"
 	"log"
-	"os"
 	"sort"
 )
 
@@ -123,10 +122,9 @@ func (s sum) less(s2 sum) bool {
 	return s.total < s2.total
 }
 
-func rangeBuildResults(rev *rev, cb func(label string, res result)) {
-	meta := rev.getMeta()
-	for i, builder := range meta.Builders {
-		cb(builder, resultFromString(meta.Results[i]))
+func rangeBuildResults(rev *rev, cb func(builder string, res result)) {
+	for i, builder := range rev.Builders {
+		cb(builder, resultFromString(rev.Results[i]))
 	}
 }
 
@@ -135,15 +133,14 @@ func main() {
 	flag.Parse()
 
 	revs := getRevs(since.Time)
+	revs = FilterInPlace(revs, func(r *rev) bool { return r.Repo == "go" })
 
 	g := newGrid(revs)
-	for i, rev := range revs {
-		fmt.Fprintf(os.Stderr, "\rProcessing rev %d/%d...", i+1, len(revs))
+	for _, rev := range revs {
 		rangeBuildResults(rev, func(label string, res result) {
 			g.add(label, rev, res)
 		})
 	}
-	fmt.Fprintf(os.Stderr, "\n")
 
 	fmt.Printf("<!DOCTYPE html>\n")
 	fmt.Printf("<html><body>\n")

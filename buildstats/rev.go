@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sync"
 	"time"
 )
 
@@ -20,8 +19,7 @@ type rev struct {
 	path string
 	date time.Time
 
-	metaOnce sync.Once
-	meta     revMeta
+	revMeta
 }
 
 var pathDateRe = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})-[0-9a-f]+$`)
@@ -37,9 +35,9 @@ func getRevs(since time.Time) []*rev {
 		log.Fatalf("reading rev directory %s: %s", revDir, err)
 	}
 
-	var matches []*rev
-	for i, dir := range dirs {
-		fmt.Fprintf(os.Stderr, "\rLoading rev %d/%d...", i+1, len(dirs))
+	// Filter the paths down without additional I/O.
+	var revs []*rev
+	for _, dir := range dirs {
 		if !dir.IsDir() {
 			continue
 		}
@@ -55,14 +53,22 @@ func getRevs(since time.Time) []*rev {
 		if t.Before(since) {
 			continue
 		}
-		matches = append(matches, &rev{
-			path: filepath.Join(revDir, name),
+
+		path := filepath.Join(revDir, dir.Name())
+		revs = append(revs, &rev{
+			path: path,
 			date: t,
 		})
 	}
+
+	// Load revision metadata.
+	for i, rev := range revs {
+		fmt.Fprintf(os.Stderr, "\rLoading rev %d/%d...", i+1, len(revs))
+		rev.revMeta = readMeta(rev.path)
+	}
 	fmt.Fprintf(os.Stderr, "\n")
 
-	return matches
+	return revs
 }
 
 func (r *rev) String() string {
@@ -71,30 +77,47 @@ func (r *rev) String() string {
 
 type revMeta struct {
 	Repo     string   `json:"repo"`
-	Builders []string // not in JSON
+	Builders []string `json:""`
 	Results  []string `json:"results"`
 }
 
-func (r *rev) getMeta() revMeta {
-	r.metaOnce.Do(func() {
-		path := filepath.Join(r.path, ".rev.json")
-		b, err := ioutil.ReadFile(path)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err = json.Unmarshal(b, &r.meta); err != nil {
-			log.Fatalf("decoding %s: %s", path, err)
-		}
+func readMeta(revPath string) revMeta {
+	var meta revMeta
 
-		path = filepath.Join(r.path, ".builders.json")
-		b, err = ioutil.ReadFile(path)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err = json.Unmarshal(b, &r.meta.Builders); err != nil {
-			log.Fatalf("decoding %s: %s", path, err)
-		}
-	})
+	path := filepath.Join(revPath, ".rev.json")
+	b, err := ioutil.ReadFile(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err = json.Unmarshal(b, &meta); err != nil {
+		log.Fatalf("decoding %s: %s", path, err)
+	}
 
-	return r.meta
+	path = filepath.Join(revPath, ".builders.json")
+	b, err = ioutil.ReadFile(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err = json.Unmarshal(b, &meta.Builders); err != nil {
+		log.Fatalf("decoding %s: %s", path, err)
+	}
+
+	return meta
+}
+
+func (r *rev) getLogPath(builder string) (string, error) {
+	p := filepath.Join(r.path, builder)
+	target, err := os.Readlink(p)
+	if err != nil {
+		return "", fmt.Errorf("error getting log path: %e", err)
+	}
+	return filepath.Clean(filepath.Join(p, target)), nil
+}
+
+func (r *rev) readLog(builder string) ([]byte, error) {
+	path, err := r.getLogPath(builder)
+	if err != nil {
+		return nil, err
+	}
+	return ioutil.ReadFile(path)
 }

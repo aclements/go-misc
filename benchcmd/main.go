@@ -29,14 +29,16 @@ func main() {
 	args := flag.Args()[1:]
 
 	for i := 0; i < *n; i++ {
-		fmt.Printf("Benchmark%s\t", benchname)
 		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 		before := time.Now()
 		if err := cmd.Run(); err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
 		after := time.Now()
+		fmt.Printf("Benchmark%s\t", benchname)
 		fmt.Printf("%d\t%d ns/op", 1, after.Sub(before))
 		fmt.Printf("\t%d user-ns/op\t%d sys-ns/op", cmd.ProcessState.UserTime(), cmd.ProcessState.SystemTime())
 		if ru, ok := cmd.ProcessState.SysUsage().(*syscall.Rusage); ok {

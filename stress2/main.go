@@ -55,8 +55,7 @@ commands log to ".run-NNNNNN" files and passes are logged to
 	flag.Var(FlagLimit{&s.MaxTotalRuns}, "max-total-runs", "exit after `N` runs with any outcome")
 	flag.Var(FlagLimit{&s.MaxPasses}, "max-passes", "exit after `N` successful runs")
 	flag.Var(FlagLimit{&s.MaxFails}, "max-fails", "exit after `N` failed runs")
-	// TODO: Flag to consider timeouts to be failures?
-	//
+	flag.BoolVar(&s.TimeoutsFail, "timeouts-fail", false, "consider timeouts to be failures")
 	// TODO: Flag to keep timed-out subprocesses around for
 	// inspection.
 	flag.Var(FlagRegexp{&s.FailRe}, "fail", "fail only if output matches `regexp`")

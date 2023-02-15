@@ -31,6 +31,8 @@ type Stress struct {
 	MaxRuns      int // Limit on passes+fails (but not flakes)
 	MaxTotalRuns int // Limit on all types of runs
 
+	TimeoutsFail bool // Consider timeouts to be failures
+
 	FailRe *regexp.Regexp
 	PassRe *regexp.Regexp
 
@@ -59,12 +61,12 @@ const (
 
 func (s *Stress) resultKind(res result, output []byte) ResultKind {
 	switch {
-	case res.status == nil:
+	case res.status == nil && !s.TimeoutsFail:
 		return ResultTimeout
-	case s.PassRe == nil && res.status.Success(),
+	case s.PassRe == nil && res.status != nil && res.status.Success(),
 		s.PassRe != nil && s.PassRe.Match(output):
 		return ResultPass
-	case s.FailRe == nil && res.status.ExitCode() != 125,
+	case s.FailRe == nil && (res.status == nil || res.status.ExitCode() != 125),
 		s.FailRe != nil && s.FailRe.Match(output):
 		return ResultFail
 	default:

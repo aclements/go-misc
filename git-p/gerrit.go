@@ -16,30 +16,31 @@ import (
 	"time"
 )
 
-// GerritChange is the JSON struct returned by a Gerrit CL query.
-type GerritChange struct {
-	ID              string
-	Project         string
-	Branch          string
-	ChangeId        string `json:"change_id"`
-	Subject         string
-	Status          string
-	Created         string
-	Updated         string
-	Mergeable       bool
-	Submittable     bool
-	Insertions      int
-	Deletions       int
-	Number          int `json:"_number"`
-	Owner           *GerritAccount
-	Labels          map[string]*GerritLabel
-	CurrentRevision string `json:"current_revision"`
-	Revisions       map[string]*GerritRevision
-	Messages        []*GerritMessage
+// GerritChangeInfo is the JSON struct returned by a Gerrit CL query.
+type GerritChangeInfo struct {
+	ID                     string
+	Project                string
+	Branch                 string
+	ChangeId               string `json:"change_id"`
+	Subject                string
+	Status                 string
+	Created                string
+	Updated                string
+	Mergeable              bool
+	Submittable            bool // Requires SUBMITTABLE
+	Insertions             int
+	Deletions              int
+	UnresolvedCommentCount int `json:"unresolved_comment_count"`
+	Number                 int `json:"_number"`
+	Owner                  *GerritAccount
+	Labels                 map[string]*GerritLabel    ``                        // Requires LABELS or DETAILED_LABELS
+	CurrentRevision        string                     `json:"current_revision"` // Requires CURRENT_REVISION or ALL_REVISIONS
+	Revisions              map[string]*GerritRevision ``                        // Requires CURRENT_REVISION or ALL_REVISIONS
+	Messages               []*GerritChangeMessageInfo ``                        // Requires MESSAGES
 }
 
-// GerritMessage is the JSON struct for a Gerrit MessageInfo.
-type GerritMessage struct {
+// GerritChangeMessageInfo is the JSON struct for a Gerrit ChangeMessageInfo.
+type GerritChangeMessageInfo struct {
 	Author   *GerritAccount
 	Message  string
 	PatchSet int `json:"_revision_number"`
@@ -57,10 +58,10 @@ type GerritLabel struct {
 
 // GerritAccount is the JSON struct for a Gerrit AccountInfo.
 type GerritAccount struct {
-	ID       int `json:"_account_id"`
-	Name     string
-	Email    string
-	Username string
+	ID       int    `json:"_account_id"` // Requires DETAILED_ACCOUNTS
+	Name     string // Requires DETAILED_ACCOUNTS
+	Email    string // Requires DETAILED_ACCOUNTS
+	Username string // Requires DETAILED_ACCOUNTS
 }
 
 // GerritApproval is the JSON struct for a Gerrit ApprovalInfo.
@@ -77,13 +78,38 @@ type GerritRevision struct {
 }
 
 type Gerrit struct {
-	url string
-	req chan<- *GerritChanges
+	url     string
+	project string
+	req     chan<- *GerritChanges
 }
 
-func NewGerrit(url string) *Gerrit {
+func NewGerrit(gerritUrl string) (*Gerrit, error) {
+	url, err := url.Parse(gerritUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse origin URL %q: %w", gerritUrl, err)
+	}
+	suf := ".googlesource.com"
+	if !strings.HasSuffix(url.Host, suf) {
+		return nil, fmt.Errorf("origin URL %q host does not end in %q (not Gerrit?)", url, suf)
+	}
+	if url.Scheme != "https" {
+		return nil, fmt.Errorf("origin URL %q must be https", url)
+	}
+	// Remove trailing slash from the origin, if any.
+	url.Path = strings.TrimRight(url.Path, "/")
+	// The path is now the project name (with a leading /).
+	if url.Path == "" || strings.Contains(url.Path[1:], "/") {
+		return nil, fmt.Errorf("origin URL %q path must be a single non-empty project name", url)
+	}
+	project := url.Path[1:]
+	// Drop the project from the URL
+	url.Path = ""
+	// The API host adds "-review".
+	i := len(url.Host) - len(suf)
+	url.Host = url.Host[:i] + "-review" + url.Host[i:]
+
 	ch := make(chan *GerritChanges, 10)
-	g := &Gerrit{url, ch}
+	g := &Gerrit{url.String(), project, ch}
 	go func() {
 		done := false
 		for !done {
@@ -111,19 +137,19 @@ func NewGerrit(url string) *Gerrit {
 			}
 		}
 	}()
-	return g
+	return g, nil
 }
 
 type GerritChanges struct {
 	query   string
 	options []string
 
-	result []*GerritChange
+	result []*GerritChangeInfo
 	err    error
 	done   chan struct{}
 }
 
-func (req *GerritChanges) Wait() ([]*GerritChange, error) {
+func (req *GerritChanges) Wait() ([]*GerritChangeInfo, error) {
 	<-req.done
 	return req.result, req.err
 }
@@ -190,9 +216,9 @@ func (g *Gerrit) queryChanges1(queries []*GerritChanges, options []string) {
 	}
 	body = body[i:]
 	var target interface{}
-	var changes [][]*GerritChange
+	var changes [][]*GerritChangeInfo
 	if len(queries) == 1 {
-		changes = make([][]*GerritChange, 1)
+		changes = make([][]*GerritChangeInfo, 1)
 		target = &changes[0]
 	} else {
 		target = &changes

@@ -46,17 +46,6 @@ func lines(s string) []string {
 	return lines
 }
 
-// getRemote returns the remote name for the given remote URL.
-func getRemote(url string) (string, error) {
-	for _, line := range lines(git("remote", "-v")) {
-		fs := strings.Fields(line)
-		if len(fs) >= 2 && fs[1] == url {
-			return fs[0], nil
-		}
-	}
-	return "", fmt.Errorf("no remote found for %s", url)
-}
-
 // upstreamOf returns the full upstream ref name of the given ref, or
 // "".
 func upstreamOf(ref string) string {
@@ -88,7 +77,7 @@ func gitPatchID(commit string) (string, error) {
 	}
 	patchID.Stdin, diffTree.Stdout = r, w
 	if err := diffTree.Start(); err != nil {
-		log.Fatal("failed to start %s: ", shellEscapeList(diffTree.Args), err)
+		log.Fatalf("failed to start %s: %s", shellEscapeList(diffTree.Args), err)
 	}
 	w.Close()
 	out, err := patchID.Output()
@@ -104,7 +93,7 @@ func gitPatchID(commit string) (string, error) {
 	}
 	fs := bytes.Fields(out)
 	if len(fs) != 2 {
-		log.Fatal("unexpected output from %s: %s", shellEscapeList(patchID.Args), out)
+		log.Fatalf("unexpected output from %s: %s", shellEscapeList(patchID.Args), out)
 	}
 	return string(fs[0]), nil
 }
@@ -188,7 +177,7 @@ func changeIds(project, forBranch string, commits []string) []string {
 			continue
 		}
 		if fs[1] != "commit" {
-			log.Fatal("unexpected object type %q for %s", fs[1], fs[0])
+			log.Fatalf("unexpected object type %q for %s", fs[1], fs[0])
 		}
 
 		// Get commit object.

@@ -33,31 +33,31 @@
 //
 // Example output
 //
-//  $ git-p gc-free-wbufs-v3
-//  gc-free-wbufs-v3 for master
-//    Not mailed c1e17d722f fixup! runtime: allocate GC workbufs from manually-…
-//    Pending    326537d00c runtime: free workbufs during… [golang.org/cl/38582]
-//      Local commit message differs
-//      1 comment on latest PS from Rick Hudson
-//      TryBots failed on linux-386, windows-386-gce, nacl-386, linux-arm
-//    Ready      b3b8fef6cb runtime: allocate GC workbufs… [golang.org/cl/38581]
-//      1 comment on latest PS from Rick Hudson
-//      TryBots failed on windows-386-gce, linux-386, nacl-386, linux-arm
-//    Ready      5fc11e7173 runtime: eliminate write barr… [golang.org/cl/38580]
-//    Ready      b5c7f08ccb runtime: rename gcBits -> gcB… [golang.org/cl/38579]
-//    Pending    d9dd54b571 runtime: eliminate write barr… [golang.org/cl/38578]
-//      2 comments on latest PS from Rick Hudson, Austin Clements
-//      TryBots failed on linux-amd64
-//    Pending    b70f9f7dc2 runtime: don't count manually… [golang.org/cl/38577]
-//      1 comment on latest PS from Rick Hudson
-//    Ready      1eae861947 runtime: generalize {alloc,fr… [golang.org/cl/38576]
-//    Ready      670d05695f runtime: rename mspan.stackfr… [golang.org/cl/38575]
-//    Ready      3e531adf5f runtime: rename _MSpanStack -… [golang.org/cl/38574]
-//      1 comment on latest PS from Rick Hudson
-//    Ready      3e3125c7e5 runtime: initialize more fiel… [golang.org/cl/38573]
-//      2 comments on latest PS from Rick Hudson, Austin Clements
-//    Submitted  302daf57f6 runtime: improve systemstack-… [golang.org/cl/38572]
-//      Local commit message differs
+//	$ git-p gc-free-wbufs-v3
+//	gc-free-wbufs-v3 for master
+//	  Not mailed c1e17d722f fixup! runtime: allocate GC workbufs from manually-…
+//	  Pending    326537d00c runtime: free workbufs during… [golang.org/cl/38582]
+//	    Local commit message differs
+//	    1 comment on latest PS from Rick Hudson
+//	    TryBots failed on linux-386, windows-386-gce, nacl-386, linux-arm
+//	  Ready      b3b8fef6cb runtime: allocate GC workbufs… [golang.org/cl/38581]
+//	    1 comment on latest PS from Rick Hudson
+//	    TryBots failed on windows-386-gce, linux-386, nacl-386, linux-arm
+//	  Ready      5fc11e7173 runtime: eliminate write barr… [golang.org/cl/38580]
+//	  Ready      b5c7f08ccb runtime: rename gcBits -> gcB… [golang.org/cl/38579]
+//	  Pending    d9dd54b571 runtime: eliminate write barr… [golang.org/cl/38578]
+//	    2 comments on latest PS from Rick Hudson, Austin Clements
+//	    TryBots failed on linux-amd64
+//	  Pending    b70f9f7dc2 runtime: don't count manually… [golang.org/cl/38577]
+//	    1 comment on latest PS from Rick Hudson
+//	  Ready      1eae861947 runtime: generalize {alloc,fr… [golang.org/cl/38576]
+//	  Ready      670d05695f runtime: rename mspan.stackfr… [golang.org/cl/38575]
+//	  Ready      3e531adf5f runtime: rename _MSpanStack -… [golang.org/cl/38574]
+//	    1 comment on latest PS from Rick Hudson
+//	  Ready      3e3125c7e5 runtime: initialize more fiel… [golang.org/cl/38573]
+//	    2 comments on latest PS from Rick Hudson, Austin Clements
+//	  Submitted  302daf57f6 runtime: improve systemstack-… [golang.org/cl/38572]
+//	    Local commit message differs
 package main
 
 import (
@@ -69,13 +69,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
-)
-
-const (
-	// TODO: Support other repos.
-	remoteUrl = "https://go.googlesource.com/go"
-	project   = "go"
-	gerritUrl = "https://go-review.googlesource.com"
 )
 
 func main() {
@@ -124,11 +117,9 @@ func main() {
 		style = nil
 	}
 
-	// Find the Gerrit remote name.
-	remote, err := getRemote(remoteUrl)
-	if err != nil {
-		log.Fatal(err)
-	}
+	// Find the Gerrit host name.
+	remote := "origin"
+	gerritUrl := git("config", "remote."+remote+".url")
 
 	// Get commits that are available from the Gerrit remote.
 	upstreams := lines(git("for-each-ref", "--format", "%(objectname)", "refs/remotes/"+remote+"/"))
@@ -138,7 +129,11 @@ func main() {
 
 	var gerrit *Gerrit
 	if !*flagLocal {
-		gerrit = NewGerrit(gerritUrl)
+		var err error
+		gerrit, err = NewGerrit(gerritUrl)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	// Pass a token through each showBranch so we can pipeline
@@ -220,7 +215,7 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 	commits := lines(git(args...))
 
 	// Get Change-Ids from these commits.
-	cids := changeIds(project, upstream, commits)
+	cids := changeIds(gerrit.project, upstream, commits)
 
 	// Fetch information on all of these changes.
 	//
@@ -265,7 +260,9 @@ func showBranch(gerrit *Gerrit, branch, extra string, remote string, upstreams [
 var labelMsg = regexp.MustCompile(`^Patch Set [0-9]+: [-a-zA-Z]+\+[0-9]$`)
 var trybotFailures = regexp.MustCompile(`(?m)^Failed on ([^:]+):`)
 
-func changeStatus(commit string, info *GerritChange) (status string, warnings []string) {
+func changeStatus(commit string, info *GerritChangeInfo) (status string, warnings []string) {
+	// TODO: Show attention information?
+
 	// Check for warnings on current PS. (Requires
 	// CURRENT_REVISION or ALL_REVISIONS option.)
 	curPatchSet := info.Revisions[info.CurrentRevision].Number
@@ -299,6 +296,14 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 			}
 		}
 	}
+	// Are there unresolved comments?
+	if info.UnresolvedCommentCount > 0 {
+		msg := fmt.Sprintf("%d unresolved comment thread", info.UnresolvedCommentCount)
+		if info.UnresolvedCommentCount > 1 {
+			msg += "s"
+		}
+		warnings = append(warnings, msg)
+	}
 	// Are there comments on the latest PS? (Requires
 	// MESSAGES option.)
 	nComments := 0
@@ -307,8 +312,8 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 		if msg.PatchSet != curPatchSet {
 			continue
 		}
-		// Ignore automated comments.
-		if strings.HasPrefix(msg.Tag, "autogenerated:gerrit:") {
+		// Ignore automated comments, including TryBot comments.
+		if strings.HasPrefix(msg.Tag, "autogenerated:") {
 			continue
 		}
 		// Ignore label-only messages (ugh, why aren't these
@@ -320,12 +325,8 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 		if msg.Author == nil {
 			continue
 		}
-		// Ignore TryBot comments (Requires
-		// DETAILED_ACCOUNTS option.)
-		if msg.Author.Email == "gobot@golang.org" {
-			continue
-		}
 		nComments++
+		// Requires DETAILED_ACCOUNTS
 		if !commentUsersSet[msg.Author.Name] {
 			commentUsersSet[msg.Author.Name] = true
 			commentUsers = append(commentUsers, msg.Author.Name)
@@ -342,13 +343,15 @@ func changeStatus(commit string, info *GerritChange) (status string, warnings []
 	// Are the trybots unhappy? (Requires LABELS option.)
 	if tbr := info.Labels["TryBot-Result"]; tbr != nil && tbr.Rejected != nil {
 		// Get the failed configs. (Requires MESSAGES option.)
+		//
+		// Unfortunately, at some point Gerrit stopped returning actual message
+		// contents in the /changes/ response, so this no longer works.
 		configs := []string{}
 		for _, msg := range info.Messages {
-			// Requires DETAILED_ACCOUNTS option.
 			if msg.PatchSet != curPatchSet {
 				continue
 			}
-			if msg.Author == nil || msg.Author.Email != "gobot@golang.org" {
+			if msg.Tag != "autogenerated:trybots~failed" {
 				continue
 			}
 			for _, f := range trybotFailures.FindAllStringSubmatch(msg.Message, -1) {
@@ -409,12 +412,12 @@ func printChange(commit string, change *GerritChanges, local bool) {
 			log.Fatal(err)
 		}
 		if len(results) > 1 {
-			log.Fatal("multiple changes found for commit %s", commit)
+			log.Fatalf("multiple changes found for commit %s", commit)
 		}
 		if len(results) == 1 {
 			status, warnings = changeStatus(commit, results[0])
 			//link = fmt.Sprintf("[%s/c/%d]", gerritUrl, results[0].Number)
-			link = fmt.Sprintf(" [golang.org/cl/%d]", results[0].Number)
+			link = fmt.Sprintf(" [go.dev/cl/%d]", results[0].Number)
 		}
 	} else if local {
 		status = ""

@@ -297,6 +297,14 @@ func changeStatus(commit string, info *GerritChangeInfo) (status string, warning
 		}
 	}
 	// Are there unresolved comments?
+	//
+	// TODO: Don't count the unresolved comment from a running trybot run.
+	// Unfortunately, to see whether a comment is resolved or not, we have to
+	// request all of the comments using the /changes/{change-id}/comments
+	// endpoint. We can't just get them in the ChangeInfo.
+	//
+	// TODO: If an unresolved comment is resolved by an unpublished draft, count
+	// that separately.
 	if info.UnresolvedCommentCount > 0 {
 		msg := fmt.Sprintf("%d unresolved comment thread", info.UnresolvedCommentCount)
 		if info.UnresolvedCommentCount > 1 {
@@ -346,6 +354,8 @@ func changeStatus(commit string, info *GerritChangeInfo) (status string, warning
 		//
 		// Unfortunately, at some point Gerrit stopped returning actual message
 		// contents in the /changes/ response, so this no longer works.
+		//
+		// TODO: Use /changes/{change-id}/comments
 		configs := []string{}
 		for _, msg := range info.Messages {
 			if msg.PatchSet != curPatchSet {

@@ -45,25 +45,25 @@ func BenchmarkCount0124(b *testing.B) {
 	rand.Read(data[:])
 
 	b.Run("formula", func(b *testing.B) {
-		var sink int
+		var sink uint
 		for i := 0; i < b.N; i++ {
 			sink = count0124Formula(data[i&(len(data)-1)])
 		}
-		sinkInt = sink
+		sinkInt = int(sink)
 	})
 	b.Run("slow", func(b *testing.B) {
-		var sink int
+		var sink uint
 		for i := 0; i < b.N; i++ {
 			sink = count0124Slow(data[i&(len(data)-1)])
 		}
-		sinkInt = sink
+		sinkInt = int(sink)
 	})
 	b.Run("table", func(b *testing.B) {
-		var sink int
+		var sink uint
 		for i := 0; i < b.N; i++ {
 			sink = count0124(data[i&(len(data)-1)])
 		}
-		sinkInt = sink
+		sinkInt = int(sink)
 	})
 }
 

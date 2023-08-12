@@ -100,6 +100,13 @@ func main() {
 	diffPct := func(before, after int) float64 {
 		return float64(100*after)/float64(before) - 100
 	}
+
+	// TODO: Does it make sense to combine all of the tables of a function into
+	// one indexed by (tableID * pcLen) + pc? Then we really can't dedup, but we
+	// could put this combined table right after the func_ and not need the
+	// references. Is there any way we could combine this with optional
+	// deduplication?
+
 	fmt.Printf("file: %d bytes\n", fileBytes)
 	fmt.Printf("functab: %d bytes\n", funcBytes)
 	fmt.Printf("refs: %d bytes\n", refBytes)

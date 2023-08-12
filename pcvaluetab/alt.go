@@ -338,18 +338,17 @@ func lookupLinearIndex(data []byte, textLen, pc uint32) int32 {
 		chunk = data[chunkOff:]
 	}
 
-	// Separate the chunk fields: N byte, PCs [N]byte, lens [N+1]2bit, vals [N+1]varlen
+	// Load PCs: N byte, PCs [N]byte
 	n := chunk[0]
-	groupBits := 2 * int(n+1)
-	groupBytes := (groupBits + 7) / 8
-	lens := chunk[1+n:]
-	vals := lens[groupBytes:]
 	pcs := chunk[1 : 1+n]
 	if debug {
-		fmt.Println("n:", n, "pcs:", pcs, "lens:", lens[:groupBytes], "vals:", vals)
+		fmt.Println("n:", n, "pcs:", pcs)
 	}
 
 	// Search for the PC, find the value index.
+	//
+	// TODO: This is one of the hottest things in this function and could easily
+	// be vectorized.
 	index := int(n)
 	for i, pc1 := range pcs {
 		if pc1 > uint8(pc) {
@@ -359,6 +358,15 @@ func lookupLinearIndex(data []byte, textLen, pc uint32) int32 {
 	}
 	if debug {
 		fmt.Println("index:", index)
+	}
+
+	// Load values: lens [N+1]uint2, vals [N+1]varlen
+	groupBits := 2 * int(n+1)
+	groupBytes := (groupBits + 7) / 8
+	lens := chunk[1+n:]
+	vals := lens[groupBytes:]
+	if debug {
+		fmt.Println("lens:", lens[:groupBytes], "vals:", vals)
 	}
 
 	var bias int32
@@ -372,12 +380,24 @@ func lookupLinearIndex(data []byte, textLen, pc uint32) int32 {
 		bias = fixedBias
 	case biasStartValue:
 		// Decode the start value.
-		startLen := count0124(lens[0] & 0b11)
+		//
+		// TODO: Only correct on little endian
+		//
+		// TODO: Requires ensuring we can read up to three bytes past the end of
+		// the pcdata encoding. In practice all the tables are concatenated, so
+		// that's easy padding to add.
+
+		// Logically, we're selecting the low field, computing the byte length
+		// of "bias", and computing a shift from that, but we've precomputed
+		// those operations into one table lookup.
+
+		//startLen := count0124(lens[0] & 0b11)
+		shift := shiftTab[lens[0]&0b11] % 32 // %32 to avoid branch
 		bias = *(*int32)(unsafe.Pointer(&vals[0]))
-		shift := (4 - startLen) * 8
+		//shift := ((4 - startLen) * 8) % 32 // %32 to avoid branch
 		bias = (bias << shift) >> shift
 		if debug {
-			fmt.Println("start len:", startLen)
+			//fmt.Println("start len:", startLen)
 			fmt.Println("bias:", bias)
 		}
 		if index == 0 {
@@ -386,7 +406,7 @@ func lookupLinearIndex(data []byte, textLen, pc uint32) int32 {
 	}
 
 	// Find the offset of the value.
-	valOff := 0
+	valOff := uint(0)
 	for _, v := range lens[:index/4] {
 		valOff += count0124(v)
 	}
@@ -395,13 +415,16 @@ func lookupLinearIndex(data []byte, textLen, pc uint32) int32 {
 	valOff += count0124(lens[index/4] & masks[index%4])
 
 	// Load the value.
+	//
+	// We don't have to shift the field down: since we're just summing up the
+	// fields and 00 adds 0, we can just mask out the one field we want.
 	valLen := count0124(lens[index/4] & selMask[index%4])
 	if debug {
 		fmt.Println("valOff:", valOff, "valLen:", valLen)
 		fmt.Printf("%02x\n", lens[index/4]&selMask[index%4])
 	}
 	val := *(*int32)(unsafe.Pointer(&vals[valOff]))
-	shift := (4 - valLen) * 8
+	shift := ((4 - valLen) * 8) % 32 // %32 to avoid branch
 	val = (val << shift) >> shift
 	val += bias
 
@@ -410,8 +433,9 @@ func lookupLinearIndex(data []byte, textLen, pc uint32) int32 {
 
 var masks = [...]uint8{0, 0b11, 0b1111, 0b111111}
 var selMask = [...]uint8{0b11, 0b1100, 0b110000, 0b11000000}
+var shiftTab = [...]uint8{0, 24, 16, 0}
 
-func count0124Formula(x uint8) int {
+func count0124Formula(x uint8) uint {
 	// See also streamvbyte for some ideas.
 
 	// A table is faster than this for 1 byte. That might not be true for larger
@@ -433,17 +457,17 @@ func count0124Formula(x uint8) int {
 	// We can then add the OnesCount of this residue to get the final count.
 
 	h := x & 0b10101010
-	return bits.OnesCount8(x) + bits.OnesCount8(h|((h>>1)&x))
+	return uint(bits.OnesCount8(x) + bits.OnesCount8(h|((h>>1)&x)))
 }
 
-func count0124Slow(x uint8) int {
-	var sum int
+func count0124Slow(x uint8) uint {
+	var sum uint
 	for i := 0; i < 4; i++ {
 		field := (x >> (i * 2)) & 0b11
 		if field == 0b11 {
 			field = 4
 		}
-		sum += int(field)
+		sum += uint(field)
 	}
 	return sum
 }
@@ -469,6 +493,6 @@ var count0124Tab = [...]uint8{
 
 // count0124 returns the sum of vector x, where x contains 4 2-bit values where
 // 0b00 => 0, 0b01 => 1, 0b10 => 2, 0b11 => 4.
-func count0124(x uint8) int {
-	return int(count0124Tab[x])
+func count0124(x uint8) uint {
+	return uint(count0124Tab[x])
 }

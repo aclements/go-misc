@@ -18,6 +18,7 @@ import (
 )
 
 func main() {
+	const debug = false
 	const debugCheckDecode = true
 
 	flag.Parse()
@@ -49,7 +50,9 @@ func main() {
 	dups := make(map[PCTabKey]*tabInfo)
 	altDups := make(map[string]int)
 	for _, fn := range symtab.Funcs {
-		fmt.Printf("%+v\n", fn)
+		if debug {
+			fmt.Printf("%+v\n", fn)
+		}
 
 		funcBytes += fn.EncSize
 
@@ -68,11 +71,13 @@ func main() {
 				dups[pcTabKey] = info
 
 				info.tab = symtab.PCTabs[pcTabKey]
-				fmt.Printf("%+v\n", info.tab)
 				info.alt = linearIndex(info.tab)
-				fmt.Printf("% 3x\n", info.alt)
-				if len(info.alt) > len(info.tab.Raw) {
-					fmt.Println("LONGER", len(info.alt), len(info.tab.Raw))
+				if debug {
+					fmt.Printf("%+v\n", info.tab)
+					fmt.Printf("% 3x\n", info.alt)
+					if len(info.alt) > len(info.tab.Raw) {
+						fmt.Println("LONGER", len(info.alt), len(info.tab.Raw))
+					}
 				}
 
 				if debugCheckDecode {

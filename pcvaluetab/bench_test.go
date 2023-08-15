@@ -7,12 +7,14 @@ package main
 import (
 	"flag"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 var flagBinary stringList
+var flagSizeStats = flag.Bool("size-stats", true, "report file and table size statistics (disable for profiling)")
 
 func init() {
 	flag.Var(&flagBinary, "bench-binary", "use PCDATA from `binary` for benchmarks; can be given multiple times")
@@ -44,7 +46,31 @@ func BenchmarkDecode(b *testing.B) {
 }
 
 func decode1(b *testing.B, bin string) {
+	var fileBytes int
+	if stat, err := os.Stat(bin); err != nil {
+		b.Fatal(err)
+	} else {
+		fileBytes = int(stat.Size())
+	}
+
 	symtab := LoadSymTab(bin)
+
+	var varintBytes, altBytes int
+	if *flagSizeStats {
+		// Collect the total size of the varint and alt tables.
+		altDups := map[string]bool{}
+		for _, tab := range symtab.PCTabs {
+			varintBytes += len(tab.Raw)
+
+			// Re-encode the varint tables.
+			altTab := linearIndex(tab)
+			if altDups[string(altTab)] {
+				continue
+			}
+			altDups[string(altTab)] = true
+			altBytes += len(altTab)
+		}
+	}
 
 	// Random sample of tables.
 	const nSamples = 1024
@@ -69,6 +95,16 @@ func decode1(b *testing.B, bin string) {
 		samples[i] = sample{tab, altTab, tab.TextLen, pc}
 	}
 
+	b.Run("varint", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			sample := &samples[i%len(samples)]
+			lookupVarintPCData(sample.varintTab.Raw, uintptr(sample.pc), nil)
+		}
+		if *flagSizeStats {
+			b.ReportMetric(float64(varintBytes), "table-bytes")
+			b.ReportMetric(float64(fileBytes), "file-bytes")
+		}
+	})
 	b.Run("varint-cache-nohit", func(b *testing.B) {
 		var cache pcvalueCache
 		for i := 0; i < b.N; i++ {
@@ -87,16 +123,21 @@ func decode1(b *testing.B, bin string) {
 			lookupVarintPCData(sample.varintTab.Raw, uintptr(sample.pc), &cache)
 		}
 	})
-	b.Run("varint-cache-none", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			sample := &samples[i%len(samples)]
-			lookupVarintPCData(sample.varintTab.Raw, uintptr(sample.pc), nil)
-		}
-	})
+	first := true
 	b.Run("alt", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			sample := &samples[i%len(samples)]
 			lookupLinearIndex(sample.altTab, sample.textLen, sample.pc)
+		}
+		if *flagSizeStats {
+			b.ReportMetric(float64(altBytes), "table-bytes")
+			altFileBytes := fileBytes - varintBytes + altBytes
+			b.ReportMetric(float64(altFileBytes), "file-bytes")
+			if first {
+				// Metrics get kind of weird with "percent change", so just log it.
+				b.Logf("file-bytes change versus varint: %+f%%", diffPct(fileBytes, altFileBytes))
+				first = false
+			}
 		}
 	})
 }

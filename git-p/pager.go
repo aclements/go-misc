@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"syscall"
 
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 // setupPager restarts this process under the git pager. If the
@@ -30,7 +30,7 @@ func setupPager() (inTerm bool) {
 	if os.Getenv("GIT_P_PAGER_IN_USE") != "" {
 		return true
 	}
-	if !terminal.IsTerminal(1) {
+	if !term.IsTerminal(1) {
 		return false
 	}
 	switch os.Getenv("TERM") {

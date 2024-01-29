@@ -8,7 +8,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -200,7 +201,7 @@ func (g *Gerrit) queryChanges1(queries []*GerritChanges, options []string) {
 		failAll(err)
 		return
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		failAll(err)
 		return
@@ -226,6 +227,10 @@ func (g *Gerrit) queryChanges1(queries []*GerritChanges, options []string) {
 	if err := json.Unmarshal(body, target); err != nil {
 		failAll(fmt.Errorf("%s: malformed json response", queryUrl))
 		return
+	}
+	if debugGerrit {
+		r, _ := json.MarshalIndent(target, "", "    ")
+		log.Printf("GET %s =>\n%s", queryUrl, r)
 	}
 	if len(changes) != len(queries) {
 		failAll(fmt.Errorf("%s: made %d queries, but got %d responses", queryUrl, len(queries), len(changes)))

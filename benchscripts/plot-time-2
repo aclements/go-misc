@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+# -*- python -*-
+
+# Copyright 2015 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+import argparse
+import os
+import datetime
+
+import numpy as np
+import scipy.stats as stats
+import pandas as pd
+
+import matplotlib as mpl
+mpl.use('GTK3Cairo')
+mpl.rc('figure', facecolor='1')
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# TODO: Take a rev-list and work from that instead. Then there can be
+# benchmarks mixed in from other branches, and it will be much easier
+# to specify a baseline.
+
+def main():
+    argp = argparse.ArgumentParser(
+        description='''Plot benchmarks over time.''')
+    argp.add_argument('-C', help='''Git directory''')
+    argp.add_argument('--baseline', metavar='COMMIT',
+                      help='''Normalize results to COMMIT results''')
+    argp.add_argument('--history', metavar='DIR', default='history',
+                      help='''Directory of benchmark results (default: %(default)s)''')
+    argp.add_argument('revisions', nargs='*', default=['HEAD'],
+                      help='''Revision range to show''')
+    args = argp.parse_args()
+
+    global gitDir
+    gitDir = argp.C
+
+    revisions = gitRevList(*argp.revisions)
+    baselineRev = None
+    if argp.baseline:
+        baselineRev = gitRevParse(argp.baseline)
+
+    # XXX HERE. I should probably just rewrite this mess in Go.
+
+
+    baseline = None
+    baselineNames = set()
+    if args.baseline:
+        baseline = pd.DataFrame()
+        for benchout in args.baseline:
+            b1 = parseBenchmarks(benchout)
+            b1['date'] = dateOf(benchout.name)
+            baseline = baseline.append(b1, ignore_index=True)
+            baselineNames.add(benchout.name)
+
+    benchmarks = pd.DataFrame()
+    for benchout in args.benchout:
+        if benchout.name in baselineNames:
+            continue
+        b1 = parseBenchmarks(benchout)
+        b1['date'] = dateOf(benchout.name)
+        benchmarks = benchmarks.append(b1, ignore_index=True)
+
+    benchMeans = getBenchMeans(benchmarks)
+    gmeanByDate = gmeanBenchmarks(benchMeans)
+
+    if baseline is not None:
+        # Normalize each date geomean to baseline
+        #
+        # XXX Should this just add a line?
+        baselineGmean = stats.gmean(getBenchMeans(baseline)['ops/sec'])
+        gmeanByDate['normalized ops/sec'] = gmeanByDate['ops/sec'] / baselineGmean
+        plotCol = 'normalized ops/sec'
+    else:
+        plotCol = 'ops/sec'
+
+#     # Normalize each benchmark to latest result.
+#     latestBenchMeans = benchMeans.sort('date', ascending=False).groupby('name').\
+#                        head(1).reset_index(drop=True)
+#     latestBenchMeans = latestBenchMeans.drop('date', 1).set_index('name')
+#     print(latestBenchMeans)
+# #    normBenchMeans = benchMeans.drop('date').groupby('name').
+
+    fig, ax = plt.subplots(1, 1, dpi=120)
+
+    #ax.set_title('go1 benchmarks relative to Go 1.4') # XXX
+    ax.plot(gmeanByDate['date'].astype(datetime.datetime), gmeanByDate[plotCol])
+    ax.set_ylim(bottom=0)
+    ax.set_ylabel('Geomean performance (%s)' % plotCol)
+    fig.tight_layout()
+    plt.show()
+
+class Rev(collections.namedtuple('commit date')): pass
+
+def gitRevList(*args):
+    revs = []
+    for line in subprocess.check_call(
+            ['git', 'rev-list', '--format=format:%H %ct'] + args,
+            stdout=subprocess.PIPE, stdin=subprocess.DEVNULL).splitlines():
+        if line.startswith('commit '):
+            continue
+        commit, date = line.split()
+        pdate = datetime.datetime.fromtimestamp(int(date))
+        revs.append(Rev(commit, pdate))
+    return revs
+
+def getBenchMeans(benchmarks):
+    # Compute ops/sec
+    benchmarks['ops/sec'] = 1e9 / benchmarks['ns/op']
+
+    # Compute the mean for each benchmark.
+    # TODO: Discard outliers.
+    return benchmarks.groupby(['date', 'name']).mean().reset_index()
+
+def gmeanBenchmarks(benchMeans):
+    # For each date, compute the geometric mean across benchmarks.
+    return benchMeans.groupby('date')['ops/sec'].agg(stats.gmean).reset_index()
+
+def parseBenchmarks(fp):
+    results = []
+    for line in fp:
+        f = line.split()
+        if len(f) < 4:
+            continue
+        name = f[0]
+        ns = None
+        for i, field in enumerate(f):
+            if field == 'ns/op':
+                ns = float(f[i-1])
+        if ns is None:
+            continue
+
+        results.append((name, ns))
+
+    return pd.DataFrame(results,
+                        columns=('name', 'ns/op'))
+
+def dateOf(path):
+    p = os.path.basename(os.path.dirname(path))
+    return datetime.datetime.strptime(p, '%Y-%m-%dT%H:%M:%S')
+
+if __name__ == '__main__':
+    main()

@@ -1,4 +1,4 @@
-module rsc.io/github/internal/minutes3
+module github.com/aclements/go-misc/minutes3
 
 go 1.23
 
@@ -32,4 +32,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240722135656-d784300faade // indirect
 	google.golang.org/grpc v1.64.1 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
+	rsc.io/github v0.5.0 // indirect
 )

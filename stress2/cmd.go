@@ -29,6 +29,13 @@ import (
 //
 // TODO(test): Test these situations.
 
+// TODO: Use PR_SET_CHILD_SUBREAPER on Linux to keep track of the
+// whole subprocess tree.
+
+// TODO: We could use PID namespaces plus a custom init process that
+// exits of stress exits to ensure the subprocess tree gets cleaned up
+// if stress exits. However, we can only do this with root privileges.
+
 type Command struct {
 	// Status contains the process exit status after the process is done.
 	Status *os.ProcessState
@@ -71,10 +78,6 @@ func StartCommand(args []string, out io.Writer) (*Command, error) {
 	//
 	// For other signals, there's simply not much we can do about
 	// cleaning up children.
-	//
-	// TODO: On Linux, use PID namespaces if possible plus a
-	// custom init process that exits if stress exits so we really
-	// can reliably clean things up.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}

@@ -11,10 +11,13 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -66,6 +69,26 @@ func main() {
 	r.Print(minutes)
 }
 
+func getConfig(path ...string) string {
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return filepath.Join(append([]string{cfgDir, "proposal-minutes"}, path...)...)
+}
+
+func getCacheDir() string {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+	cacheDir = filepath.Join(cacheDir, "proposal-minutes")
+	if err := os.MkdirAll(cacheDir, 0777); err != nil {
+		log.Fatalf("creating cache directory: %s", err)
+	}
+	return cacheDir
+}
+
 type Reporter struct {
 	Client    *github.Client
 	Proposals *github.Project
@@ -75,10 +98,16 @@ type Reporter struct {
 }
 
 func NewReporter() (*Reporter, error) {
-	c, err := github.Dial("")
+	token, err := os.ReadFile(getConfig("github.tok"))
 	if err != nil {
-		return nil, err
+		if errors.Is(err, fs.ErrNotExist) {
+			log.Println("Please follow the instructions in README.md to create a GitHub token.")
+		}
+		log.Fatal(err)
 	}
+	token = bytes.TrimSpace(token)
+
+	c := github.NewClient(string(token))
 
 	r := &Reporter{Client: c}
 

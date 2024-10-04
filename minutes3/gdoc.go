@@ -7,9 +7,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
+	"io/fs"
 	"log"
-	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -21,16 +22,20 @@ import (
 	"google.golang.org/api/sheets/v4"
 )
 
-func getClient() *http.Client {
-	data, err := os.ReadFile("/Users/rsc/.cred/proposal-minutes-gdoc.json")
+func getOAuthConfig(scopes []string) *oauth2.Config {
+	// Read the "client" (application) config.
+	data, err := os.ReadFile(getConfig("gdoc.json"))
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			log.Println("Please follow the instructions in README.md to create a GCP OAuth client ID.")
+		}
 		log.Fatal(err)
 	}
-	cfg, err := google.JWTConfigFromJSON(data, "https://www.googleapis.com/auth/spreadsheets")
+	config, err := google.ConfigFromJSON(data, scopes...)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("unable to parse client secret file to config: %v", err)
 	}
-	return cfg.Client(oauth2.NoContext)
+	return config
 }
 
 type Doc struct {
@@ -65,8 +70,11 @@ func parseDoc() *Doc {
 			log.Fatal(err)
 		}
 	} else {
-		client := getClient()
-
+		scopes := []string{
+			"https://www.googleapis.com/auth/spreadsheets.readonly",
+		}
+		config := getOAuthConfig(scopes)
+		client := makeOAuthClient(getCacheDir(), config)
 		srv, err := sheets.NewService(context.Background(), option.WithHTTPClient(client))
 		if err != nil {
 			log.Fatalf("Unable to retrieve Docs client: %v", err)

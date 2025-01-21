@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,6 +28,7 @@ import (
 
 var docjson = flag.Bool("docjson", false, "print google doc info in json")
 var doccsv = flag.Bool("doccsv", false, "print google doc info in csv")
+var apply = flag.Bool("apply", false, "perform actions")
 
 var failure = false
 
@@ -55,7 +57,7 @@ func main() {
 		return
 	}
 
-	r, err := NewReporter()
+	r, err := NewReporter(!*apply)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -67,6 +69,10 @@ func main() {
 	}
 	fmt.Printf("TO POST TO https://go.dev/s/proposal-minutes:\n\n")
 	r.Print(minutes)
+
+	if !*apply {
+		fmt.Printf("Re-run with -apply to perform above actions\n")
+	}
 }
 
 func getConfig(path ...string) string {
@@ -97,7 +103,7 @@ type Reporter struct {
 	Backlog   *github.Milestone
 }
 
-func NewReporter() (*Reporter, error) {
+func NewReporter(dryRun bool) (*Reporter, error) {
 	token, err := os.ReadFile(getConfig("github.tok"))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -107,7 +113,11 @@ func NewReporter() (*Reporter, error) {
 	}
 	token = bytes.TrimSpace(token)
 
-	c := github.NewClient(string(token))
+	var c GitHubClient
+	c = github.NewClient(string(token))
+	if dryRun {
+		c = &GitHubDryClient{c, slog.Default()}
+	}
 
 	r := &Reporter{Client: c}
 

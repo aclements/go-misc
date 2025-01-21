@@ -40,7 +40,6 @@ func getOAuthConfig(scopes []string) *oauth2.Config {
 
 type Doc struct {
 	Date   time.Time
-	Text   []string // top-level text
 	Who    []string
 	Issues []*Issue
 }

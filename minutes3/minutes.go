@@ -26,7 +26,7 @@ import (
 )
 
 var docjson = flag.Bool("docjson", false, "print google doc info in json")
-var doccsv = flag.Bool("doccsv", false, "print google doc info in json")
+var doccsv = flag.Bool("doccsv", false, "print google doc info in csv")
 
 var failure = false
 
@@ -181,8 +181,6 @@ type Event struct {
 const checkQuestion = "Have all remaining concerns about this proposal been addressed?"
 
 func (r *Reporter) Update(doc *Doc) *Minutes {
-	const prefix = "https://github.com/golang/go/issues/"
-
 	m := new(Minutes)
 	m.Date = doc.Date
 
@@ -226,7 +224,7 @@ Issues:
 			actions = nil
 		}
 		if len(actions) == 0 {
-			log.Printf("#%d missing action")
+			log.Printf("#%d missing action", di.Number)
 			failure = true
 		}
 		col := "Active"

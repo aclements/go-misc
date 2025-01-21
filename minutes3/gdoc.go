@@ -106,67 +106,61 @@ func parseDoc() *Doc {
 		log.Fatal("did not find Proposals sheet")
 	}
 
-	const (
-		column        = -'A'
-		issueColumn   = column + 'A'
-		statusColumn  = column + 'B'
-		titleColumn   = column + 'D'
-		detailsColumn = column + 'E'
-
-		metaColumn      = column + 'B'
-		metaValueColumn = column + 'D'
-
-		maxColumn = column + 'E'
-	)
+	var metaCols, cols colMap
 	blank := 0
 	meta := true
 	for _, data := range sheet.Data {
 		for r, row := range data.RowData {
-			cells := make([]string, max(len(row.Values), maxColumn+1))
-			for c, cell := range row.Values {
-				v := cell.EffectiveValue
-				if v != nil && v.StringValue != nil {
-					cells[c] = *v.StringValue
+			// On the first row, figure out the meta columns.
+			if metaCols == nil {
+				var nonempty []int
+				for i, val := range row.Values {
+					if val.EffectiveValue != nil {
+						nonempty = append(nonempty, i)
+					}
 				}
+				if len(nonempty) != 2 {
+					log.Fatalf("on first spreadsheet row, expected two non-empty cells, got %d", len(nonempty))
+				}
+				metaCols = colMap{"0": 0, "key": nonempty[0], "value": nonempty[1]}
 			}
-			if cells[issueColumn] == "Issue" {
+			// Should we switch to the body?
+			if meta && metaCols.getString(row, "0") == "Issue" {
 				meta = false
+				cols = newColMap(row)
 				continue
 			}
+
+			// Process metadata cells
 			if meta {
-				val := cells[metaValueColumn]
-				switch cells[metaColumn] {
+				switch key := metaCols.getString(row, "key"); key {
 				case "Date:":
-					var day int
-					if len(row.Values) > metaValueColumn {
-						v := row.Values[metaValueColumn].EffectiveValue
-						if v != nil && v.NumberValue != nil {
-							day = int(*v.NumberValue)
-						}
-					}
-					if day == 0 {
-						log.Printf("%c%d: bad date %q", metaValueColumn-column, r+1, val)
+					date, ok := parseSpreadsheetDate(metaCols.getEV(row, "value"))
+					if !ok {
+						log.Printf("%c%d: bad date %q", metaCols.col("value"), r+1, metaCols.getString(row, "value"))
 						failure = true
 						continue
 					}
-					var day0 = time.Date(1899, time.December, 30, 12, 0, 0, 0, time.UTC)
-					d.Date = day0.Add(time.Duration(time.Duration(day) * 24 * time.Hour))
+					d.Date = date
 				case "Who:":
-					d.Who = regexp.MustCompile(`[,\s]+`).Split(val, -1)
+					d.Who = regexp.MustCompile(`[,\s]+`).Split(metaCols.getString(row, "value"), -1)
 				case "":
 					// ignore
 				default:
-					log.Printf("%c%d: unknown meta key %q", metaColumn-column, r+1, cells[metaColumn])
+					log.Printf("%c%d: unknown meta key %q", metaCols.col("key"), r+1, key)
 					failure = true
 				}
 				continue
 			}
 
+			// Process body
+			cells := cols.getterString(row)
+
 			var issue Issue
-			issue.Minutes = cells[statusColumn]
-			issue.Title = cells[titleColumn]
-			issue.Details = cells[detailsColumn]
-			num := cells[issueColumn]
+			issue.Minutes = cells("Status")
+			issue.Title = cells("Title")
+			issue.Details = cells("Proposal Details")
+			num := cells("Issue")
 			if num == "" && issue == (Issue{}) {
 				blank++
 				continue
@@ -177,7 +171,7 @@ func parseDoc() *Doc {
 			}
 			n, err := strconv.Atoi(num)
 			if err != nil {
-				log.Printf("%c%d: bad issue number %q", issueColumn-column, r+1, num)
+				log.Printf("%c%d: bad issue number %q", cols.col("Issue"), r+1, num)
 				failure = true
 				continue
 			}
@@ -195,4 +189,62 @@ func parseDoc() *Doc {
 	}
 
 	return d
+}
+
+func parseSpreadsheetDate(cell *sheets.ExtendedValue) (time.Time, bool) {
+	if cell == nil || cell.NumberValue == nil {
+		return time.Time{}, false
+	}
+
+	day := int(*cell.NumberValue)
+	if day == 0 {
+		return time.Time{}, false
+	}
+	var day0 = time.Date(1899, time.December, 30, 12, 0, 0, 0, time.UTC)
+	return day0.Add(time.Duration(time.Duration(day) * 24 * time.Hour)), true
+}
+
+type colMap map[string]int
+
+func newColMap(row *sheets.RowData) colMap {
+	m := make(map[string]int)
+	for i, label := range row.Values {
+		if label.EffectiveValue != nil && label.EffectiveValue.StringValue != nil {
+			m[*label.EffectiveValue.StringValue] = i
+		}
+	}
+	return m
+}
+
+func (m colMap) col(name string) rune {
+	i, ok := m[name]
+	if !ok {
+		panic("unknown column label: " + name)
+	}
+	return 'A' + rune(i)
+}
+
+func (m colMap) getEV(row *sheets.RowData, name string) *sheets.ExtendedValue {
+	i, ok := m[name]
+	if !ok {
+		panic("unknown column label: " + name)
+	}
+	if i >= len(row.Values) {
+		return nil
+	}
+	return row.Values[i].EffectiveValue
+}
+
+func (m colMap) getString(row *sheets.RowData, name string) string {
+	v := m.getEV(row, name)
+	if v == nil || v.StringValue == nil {
+		return ""
+	}
+	return *v.StringValue
+}
+
+func (m colMap) getterString(row *sheets.RowData) func(name string) string {
+	return func(name string) string {
+		return m.getString(row, name)
+	}
 }

@@ -90,7 +90,7 @@ func getCacheDir() string {
 }
 
 type Reporter struct {
-	Client    *github.Client
+	Client    GitHubClient
 	Proposals *github.Project
 	Items     map[int]*github.ProjectItem
 	Labels    map[string]*github.Label

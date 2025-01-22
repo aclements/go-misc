@@ -9,10 +9,13 @@ import (
 	"strings"
 
 	"rsc.io/github"
+	"rsc.io/github/schema"
 )
 
 // GitHubClient wraps the [github.Client] API to provide injection points.
 type GitHubClient interface {
+	GraphQLQuery(query string, vars github.Vars) (*schema.Query, error)
+
 	SearchLabels(org string, repo string, query string) ([]*github.Label, error)
 	SearchMilestones(org string, repo string, query string) ([]*github.Milestone, error)
 
@@ -37,6 +40,10 @@ type GitHubClient interface {
 type GitHubDryClient struct {
 	c      GitHubClient
 	logger *slog.Logger
+}
+
+func (c *GitHubDryClient) GraphQLQuery(query string, vars github.Vars) (*schema.Query, error) {
+	return c.c.GraphQLQuery(query, vars)
 }
 
 func (c *GitHubDryClient) SearchLabels(org string, repo string, query string) ([]*github.Label, error) {
@@ -114,4 +121,20 @@ func (c *GitHubDryClient) SetProjectItemFieldOption(project *github.Project, ite
 
 func (c *GitHubDryClient) Discussions(org string, repo string) ([]*github.Discussion, error) {
 	return c.c.Discussions(org, repo)
+}
+
+// GitHubUser returns the user name of the current user.
+func GitHubUser(c GitHubClient) (string, error) {
+	query := `
+	query {
+		viewer {
+			login
+		}
+	}
+	`
+	out, err := c.GraphQLQuery(query, nil)
+	if err != nil {
+		return "", err
+	}
+	return out.Viewer.Login, nil
 }

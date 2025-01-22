@@ -204,6 +204,12 @@ func (r *Reporter) Update(doc *Doc) *Minutes {
 	}
 	sort.Strings(m.Who)
 
+	// Get current user's login for constructing messages
+	userName, err := GitHubUser(r.Client)
+	if err != nil {
+		log.Fatalf("getting current user: %v", err)
+	}
+
 	seen := make(map[int]bool)
 Issues:
 	for _, di := range doc.Issues {
@@ -337,7 +343,7 @@ Issues:
 		}
 
 		if status.Option.Name != col {
-			msg := updateMsg(status.Option.Name, col, reason)
+			msg := updateMsg(status.Option.Name, col, reason, userName)
 			if msg == "" {
 				log.Fatalf("no update message for %s", col)
 			}

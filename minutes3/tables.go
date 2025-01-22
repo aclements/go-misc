@@ -53,15 +53,17 @@ var actionMap = map[string]string{
 // There's also "check", which is mapped to "comment" plus posting the proposal
 // details.
 
-func updateMsg(old, new, reason string) string {
+func updateMsg(old, new, reason, userName string) string {
 	msg := updateMsgs[reason]
 	if msg == "" {
 		return updateMsgs[new]
 	}
-	return msg + msgFooter + "\n"
+	return msg + msgFooter(userName) + "\n"
 }
 
-const msgFooter = "— aclements for the proposal review group"
+func msgFooter(userName string) string {
+	return fmt.Sprintf("— %s for the proposal review group", userName)
+}
 
 var updateMsgs = map[string]string{
 	"duplicate": `

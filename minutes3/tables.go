@@ -56,7 +56,10 @@ var actionMap = map[string]string{
 func updateMsg(old, new, reason, userName string) string {
 	msg := updateMsgs[reason]
 	if msg == "" {
-		return updateMsgs[new]
+		msg = updateMsgs[new]
+	}
+	if msg == "" {
+		return ""
 	}
 	return msg + msgFooter(userName) + "\n"
 }

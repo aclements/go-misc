@@ -58,6 +58,12 @@ var (
 )
 
 func parseDoc() *Doc {
+	const (
+		id        = "1EG7oPcLls9HI_exlHLYuwk2YaN4P5mDc4O2vGyRqZHU"
+		sheetName = "Proposals"
+		fields    = "sheets.properties,sheets.data.rowData.values(effectiveValue,formattedValue)"
+	)
+
 	var spreadsheet *sheets.Spreadsheet
 	if *debugJSON == "load" {
 		spreadsheet = new(sheets.Spreadsheet)
@@ -79,9 +85,7 @@ func parseDoc() *Doc {
 			log.Fatalf("Unable to retrieve Docs client: %v", err)
 		}
 
-		id := "1EG7oPcLls9HI_exlHLYuwk2YaN4P5mDc4O2vGyRqZHU"
-
-		spreadsheet, err = srv.Spreadsheets.Get(id).IncludeGridData(true).Do()
+		spreadsheet, err = srv.Spreadsheets.Get(id).Ranges("'" + sheetName + "'").Fields(fields).Do()
 		if err != nil {
 			log.Fatalf("Unable to retrieve data from document: %v", err)
 		}
@@ -97,13 +101,13 @@ func parseDoc() *Doc {
 	d := new(Doc)
 	var sheet *sheets.Sheet
 	for _, s := range spreadsheet.Sheets {
-		if s.Properties.Title == "Proposals" {
+		if s.Properties.Title == sheetName {
 			sheet = s
 			break
 		}
 	}
 	if sheet == nil {
-		log.Fatal("did not find Proposals sheet")
+		log.Fatalf("did not find %s sheet", sheetName)
 	}
 
 	var metaCols, cols colMap

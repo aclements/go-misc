@@ -19,6 +19,7 @@ type GitHubClient interface {
 	SearchLabels(org string, repo string, query string) ([]*github.Label, error)
 	SearchMilestones(org string, repo string, query string) ([]*github.Milestone, error)
 
+	Issue(org string, repo string, n int) (*github.Issue, error)
 	IssueComments(issue *github.Issue) ([]*github.IssueComment, error)
 	AddIssueComment(issue *github.Issue, text string) error
 	AddIssueLabels(issue *github.Issue, labels ...*github.Label) error
@@ -52,6 +53,10 @@ func (c *GitHubDryClient) SearchLabels(org string, repo string, query string) ([
 
 func (c *GitHubDryClient) SearchMilestones(org string, repo string, query string) ([]*github.Milestone, error) {
 	return c.c.SearchMilestones(org, repo, query)
+}
+
+func (c *GitHubDryClient) Issue(org string, repo string, n int) (*github.Issue, error) {
+	return c.c.Issue(org, repo, n)
 }
 
 func (c *GitHubDryClient) IssueComments(issue *github.Issue) ([]*github.IssueComment, error) {

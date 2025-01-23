@@ -69,8 +69,8 @@ func main() {
 		// failures?
 		os.Exit(1)
 	}
-	fmt.Printf("TO POST TO https://go.dev/s/proposal-minutes:\n\n")
-	r.Print(minutes)
+	const minutesIssue = 33502 // AKA https://go.dev/s/proposal-minutes
+	r.PostMinutes(minutes, minutesIssue)
 
 	if !*apply {
 		fmt.Printf("Re-run with -apply to perform above actions\n")
@@ -467,10 +467,11 @@ Issues:
 	return m
 }
 
-func (r *Reporter) Print(m *Minutes) {
+func (r *Reporter) PostMinutes(m *Minutes, issueNum int) {
 	var buf bytes.Buffer
 
-	fmt.Fprintf(&buf, "**%s / ", m.Date.Format("2006-01-02"))
+	prefix := fmt.Sprintf("**%s / ", m.Date.Format("2006-01-02"))
+	buf.WriteString(prefix)
 	for i, who := range m.Who {
 		if i > 0 {
 			fmt.Fprintf(&buf, ", ")
@@ -537,7 +538,32 @@ func (r *Reporter) Print(m *Minutes) {
 		fmt.Fprintf(&buf, "\n")
 	}
 
-	os.Stdout.Write(buf.Bytes())
+	post := buf.String()
+
+	// Check if we've already posted this.
+	issue, err := r.Client.Issue("golang", "go", issueNum)
+	if err != nil {
+		log.Fatalf("could not find minutes issue #%d: %s", issueNum, err)
+	}
+	comments, err := r.Client.IssueComments(issue)
+	if err != nil {
+		log.Fatalf("could not read minutes issue comments: %s", err)
+	}
+	for _, c := range comments {
+		if strings.Contains(c.Body, prefix) {
+			if c.Body != post {
+				log.Fatalf("minutes issue #%d has has comment from %s, but does not match full post", issueNum, m.Date.Format("2006-01-02"))
+			}
+			log.Printf("already posted to minutes #%d", issueNum)
+			return
+		}
+	}
+
+	// Post minutes
+	log.Printf("posting to minutes #%d", issueNum)
+	if err := r.Client.AddIssueComment(issue, post); err != nil {
+		log.Fatalf("error posting to minutes #%d: %s", issueNum, err)
+	}
 }
 
 var markdownEscaper = strings.NewReplacer(

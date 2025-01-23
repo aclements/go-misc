@@ -65,7 +65,9 @@ func main() {
 
 	minutes := r.Update(doc)
 	if failure {
-		return
+		// TODO: Should we delay updates and apply them only if there are no
+		// failures?
+		os.Exit(1)
 	}
 	fmt.Printf("TO POST TO https://go.dev/s/proposal-minutes:\n\n")
 	r.Print(minutes)

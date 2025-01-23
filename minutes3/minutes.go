@@ -217,6 +217,8 @@ Issues:
 	for _, di := range doc.Issues {
 		item := r.Items[di.Number]
 		if item == nil {
+			// TODO: Maybe "add" should add it to the proposal project if it
+			// isn't already there and set the Status to "Active".
 			log.Printf("missing from proposal project: #%d", di.Number)
 			failure = true
 			continue
@@ -225,7 +227,7 @@ Issues:
 		issue := item.Issue
 		status := item.FieldByName("Status")
 		if status == nil {
-			log.Printf("item missing status: #%d", di.Number)
+			log.Printf("item missing status in proposal project (set to incoming?): #%d", di.Number)
 			failure = true
 			continue
 		}

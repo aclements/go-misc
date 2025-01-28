@@ -111,6 +111,7 @@ func parseDoc() *Doc {
 	}
 
 	var metaCols, cols colMap
+	headerRow := -1
 	blank := 0
 	meta := true
 	for _, data := range sheet.Data {
@@ -132,20 +133,13 @@ func parseDoc() *Doc {
 			if meta && metaCols.getString(row, "0") == "Issue" {
 				meta = false
 				cols = newColMap(row)
+				headerRow = r
 				continue
 			}
 
 			// Process metadata cells
 			if meta {
 				switch key := metaCols.getString(row, "key"); key {
-				case "Date:":
-					date, ok := parseSpreadsheetDate(metaCols.getEV(row, "value"))
-					if !ok {
-						log.Printf("%c%d: bad date %q", metaCols.col("value"), r+1, metaCols.getString(row, "value"))
-						failure = true
-						continue
-					}
-					d.Date = date
 				case "Who:":
 					d.Who = regexp.MustCompile(`[,\s]+`).Split(metaCols.getString(row, "value"), -1)
 				case "":
@@ -157,11 +151,23 @@ func parseDoc() *Doc {
 				continue
 			}
 
+			// Process second header row.
+			if r == headerRow+1 {
+				date, ok := parseSpreadsheetDate(cols.getEV(row, "New status"))
+				if !ok {
+					log.Printf("%c%d: bad date %q", cols.col("New status"), r+1, cols.getString(row, "New status"))
+					failure = true
+					continue
+				}
+				d.Date = date
+				continue
+			}
+
 			// Process body
 			cells := cols.getterString(row)
 
 			var issue Issue
-			issue.Minutes = cells("Status")
+			issue.Minutes = cells("New status")
 			issue.Title = cells("Title")
 			issue.Details = cells("Proposal Details")
 			num := cells("Issue")

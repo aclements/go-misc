@@ -10,20 +10,15 @@ import (
 )
 
 var whoMap = map[string]string{
-	"andybons":  "andybons",
-	"bradfitz":  "bradfitz",
-	"gri":       "griesemer",
-	"iant":      "ianlancetaylor",
-	"r":         "robpike",
-	"rsc":       "rsc",
-	"sfrancia":  "spf13",
-	"austin":    "aclements",
-	"julieqiu":  "julieqiu",
-	"adonovan":  "adonovan",
-	"bracewell": "rolandshoemaker",
-	"roland":    "rolandshoemaker",
-	"cherryyz":  "cherrymui",
-	"cherry":    "cherrymui",
+	"Alan":   "adonovan",
+	"Andy":   "andybons",
+	"Austin": "aclements",
+	"Brad":   "bradfitz",
+	"Cherry": "cherrymui",
+	"Ian":    "ianlancetaylor",
+	"Robert": "griesemer",
+	"Roland": "rolandshoemaker",
+	"Russ":   "rsc",
 }
 
 func gitWho(who string) string {

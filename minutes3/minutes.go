@@ -73,6 +73,7 @@ func main() {
 	r.PostMinutes(minutes, minutesIssue)
 
 	if !*apply {
+		fmt.Println()
 		fmt.Printf("Re-run with -apply to perform above actions\n")
 	}
 }

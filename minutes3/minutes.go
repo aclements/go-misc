@@ -29,15 +29,22 @@ import (
 var docjson = flag.Bool("docjson", false, "print google doc info in json")
 var doccsv = flag.Bool("doccsv", false, "print google doc info in csv")
 var apply = flag.Bool("apply", false, "perform actions")
+var testSheet = flag.String("test-sheet", "", "use sheet doc `id` for testing")
 
 var failure = false
 
 func main() {
+	const sheetDocID = "1EG7oPcLls9HI_exlHLYuwk2YaN4P5mDc4O2vGyRqZHU"
+
 	log.SetPrefix("minutes3: ")
 	log.SetFlags(0)
 
 	flag.Parse()
-	doc := parseDoc()
+	docID := sheetDocID
+	if *testSheet != "" {
+		docID = *testSheet
+	}
+	doc := parseDoc(docID)
 	if *docjson {
 		js, err := json.MarshalIndent(doc, "", "\t")
 		if err != nil {
@@ -75,6 +82,12 @@ func main() {
 	if !*apply {
 		fmt.Println()
 		fmt.Printf("Re-run with -apply to perform above actions\n")
+		return
+	}
+
+	doc.FinishDoc()
+	if failure {
+		os.Exit(1)
 	}
 }
 

@@ -18,6 +18,13 @@ Credentials > OAuth client ID. Select "Desktop app", give it a name (I used
 `proposal-minutes`, again), and click Create. On the next screen, click
 "Download JSON" and save this file as `~/.config/proposal-minutes/gdoc.json`.
 
+Enable write scope for spreadsheets: Go to APIs & Services > OAuth consent
+screen > Data Access and click "Add or remove scopes". Add the
+`https://www.googleapis.com/auth/spreadsheets` scope, either by finding it in
+the table of known scopes or by manually entering it. Click "Update". Finally,
+click "Save" on the Data Access page. (Note: If you already had a cached OAuth
+token, you'll have to delete it.)
+
 # Generate GitHub token
 
 Go to GitHub, then Account Settings > Developer Options > Personal Access

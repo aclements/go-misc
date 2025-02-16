@@ -59,6 +59,12 @@ type Issue struct {
 	Minutes string
 	Comment string
 	Notes   string
+
+	// IssueLink is the URL of the GitHub comment linked in "current status",
+	// or "" if none.
+	IssueLink string
+
+	row rowIndex
 }
 
 var (
@@ -68,7 +74,7 @@ var (
 func parseDoc(docID string) *Doc {
 	const (
 		sheetName = "Proposals"
-		fields    = "sheets.properties,sheets.data.rowData.values(effectiveValue,formattedValue)"
+		fields    = "sheets.properties,sheets.data.rowData.values(effectiveValue,hyperlink)"
 	)
 
 	d := new(Doc)
@@ -161,7 +167,7 @@ func parseDoc(docID string) *Doc {
 				case "Who:":
 					d.whoCell = coord{d.sheet, metaCols.col("value"), r}
 					val := metaCols.getString(row, "value")
-					if val == "<WHO>" {
+					if val == "" {
 						log.Printf("%s: who list not updated", d.whoCell)
 					} else {
 						d.Who = regexp.MustCompile(`[,\s]+`).Split(val, -1)
@@ -218,6 +224,12 @@ func parseDoc(docID string) *Doc {
 				continue
 			}
 			issue.Number = n
+
+			issue.row = r
+
+			// Get the current issue comment link, if any.
+			issue.IssueLink = row.Values[cols.col("Issue")].Hyperlink
+
 			d.Issues = append(d.Issues, &issue)
 		}
 	}
@@ -235,15 +247,25 @@ func parseDoc(docID string) *Doc {
 
 // FinishDoc performs post-minutes updates to the Doc.
 //
-// Specifically, it moves the "new status" column to the "current status" column
-// and clears the "new status" column and attendees list.
-func (d *Doc) FinishDoc() {
+// Specifically, it moves the "new status" column to the "current status"
+// column, clears the "new status" column and attendees list, and updates issue
+// links to point to the latest comments.
+//
+// commentURLs maps from issue number to the URL of the most recent comment to
+// link to from the sheet.
+func (d *Doc) FinishDoc(commentURLs map[int]string) {
 	log.Printf("updating status columns in sheet")
 
 	srv := d.srv
 
+	linkCol := d.cols.col("Issue")
 	curStatus := d.cols.col("Cur. status")
 	newStatus := d.cols.col("New status")
+
+	updateSpreadsheetRequest := &sheets.BatchUpdateSpreadsheetRequest{}
+	addRequest := func(req *sheets.Request) {
+		updateSpreadsheetRequest.Requests = append(updateSpreadsheetRequest.Requests, req)
+	}
 
 	// Move "new status" to "current status". (CutPasteRequest *almost* works
 	// for this, but doesn't seem to implement PASTE_VALUES correctly.)
@@ -258,6 +280,8 @@ func (d *Doc) FinishDoc() {
 		Fields: "userEnteredValue",
 		Range:  copyRange,
 	}
+	addRequest(&sheets.Request{CopyPaste: copyReq})
+	addRequest(&sheets.Request{UpdateCells: clearReq})
 
 	// Put placeholder in "new status"
 	datePlaceholder := "<DATE>"
@@ -272,9 +296,10 @@ func (d *Doc) FinishDoc() {
 			}},
 		}},
 	}
+	addRequest(&sheets.Request{UpdateCells: updateDateReq})
 
-	// Put placeholder in "who"
-	whoPlaceholder := "<WHO>"
+	// Clear "who" (this triggers a conditional formatting)
+	whoPlaceholder := ""
 	updateWhoReq := &sheets.UpdateCellsRequest{
 		Fields: "userEnteredValue",
 		Start:  d.whoCell.Coord(),
@@ -286,16 +311,44 @@ func (d *Doc) FinishDoc() {
 			}},
 		}},
 	}
+	addRequest(&sheets.Request{UpdateCells: updateWhoReq})
+
+	// Update comment links
+	issueToRow := make(map[int]rowIndex)
+	for _, issue := range d.Issues {
+		issueToRow[issue.Number] = issue.row
+	}
+	for issue, url := range commentURLs {
+		row, ok := issueToRow[issue]
+		if !ok {
+			log.Fatalf("comment URLs contains issue %d that is not in the sheet", issue)
+		}
+		numberString := fmt.Sprint(issue)
+		setLinkReq := &sheets.UpdateCellsRequest{
+			// We need to set the text content as well as the format: if the
+			// entered value is a HYPERLINK formula and we don't override that,
+			// the link in the text format has no effect.
+			Fields: "userEnteredValue,userEnteredFormat.textFormat",
+			Start:  coord{d.sheet, linkCol, row}.Coord(),
+			Rows: []*sheets.RowData{{
+				Values: []*sheets.CellData{{
+					UserEnteredValue: &sheets.ExtendedValue{
+						StringValue: &numberString,
+					},
+					UserEnteredFormat: &sheets.CellFormat{
+						TextFormat: &sheets.TextFormat{
+							Link: &sheets.Link{
+								Uri: url,
+							},
+						},
+					},
+				}},
+			}},
+		}
+		addRequest(&sheets.Request{UpdateCells: setLinkReq})
+	}
 
 	// Perform updates
-	updateSpreadsheetRequest := &sheets.BatchUpdateSpreadsheetRequest{
-		Requests: []*sheets.Request{
-			{CopyPaste: copyReq},
-			{UpdateCells: clearReq},
-			{UpdateCells: updateDateReq},
-			{UpdateCells: updateWhoReq},
-		},
-	}
 	_, err := srv.Spreadsheets.BatchUpdate(d.docID, updateSpreadsheetRequest).Do()
 	if err != nil {
 		log.Printf("failed to update status columns in sheet: %s", err)

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"rsc.io/github"
@@ -42,7 +43,13 @@ func main() {
 	flag.Parse()
 	docID := sheetDocID
 	if *testSheet != "" {
+		if *apply {
+			log.Fatalf("cannot use both -test-sheet and -apply")
+		}
 		docID = *testSheet
+		if docID == sheetDocID {
+			log.Fatalf("-test-sheet is the ID of the main sheet")
+		}
 	}
 	doc := parseDoc(docID)
 	if *docjson {
@@ -70,7 +77,7 @@ func main() {
 	}
 	r.RetireOld()
 
-	minutes := r.Update(doc)
+	minutes, commentURLs := r.Update(doc)
 	if failure {
 		// TODO: Should we delay updates and apply them only if there are no
 		// failures?
@@ -79,13 +86,13 @@ func main() {
 	const minutesIssue = 33502 // AKA https://go.dev/s/proposal-minutes
 	r.PostMinutes(minutes, minutesIssue)
 
-	if !*apply {
+	if !*apply && *testSheet == "" {
 		fmt.Println()
 		fmt.Printf("Re-run with -apply to perform above actions\n")
 		return
 	}
 
-	doc.FinishDoc()
+	doc.FinishDoc(commentURLs)
 	if failure {
 		os.Exit(1)
 	}
@@ -206,7 +213,7 @@ type Event struct {
 
 const checkQuestion = "Have all remaining concerns about this proposal been addressed?"
 
-func (r *Reporter) Update(doc *Doc) *Minutes {
+func (r *Reporter) Update(doc *Doc) (*Minutes, map[int]string) {
 	m := new(Minutes)
 	m.Date = doc.Date
 
@@ -227,8 +234,10 @@ func (r *Reporter) Update(doc *Doc) *Minutes {
 	}
 
 	seen := make(map[int]bool)
+	commentURLs := make(map[int]string)
 Issues:
 	for _, di := range doc.Issues {
+		var commentURL string
 		item := r.Items[di.Number]
 		if item == nil {
 			// TODO: Maybe "add" should add it to the proposal project if it
@@ -331,17 +340,25 @@ Issues:
 			}
 		}
 
-		if check {
+		commentsOnce := sync.OnceValues(func() ([]*github.IssueComment, error) {
 			comments, err := r.Client.IssueComments(issue)
 			if err != nil {
 				log.Printf("%s: cannot read issue comments\n", url)
 				failure = true
+			}
+			return comments, err
+		})
+
+		if check {
+			comments, err := commentsOnce()
+			if err != nil {
 				continue
 			}
 			for i := len(comments) - 1; i >= 0; i-- {
 				c := comments[i]
 				if time.Since(c.CreatedAt) < 5*24*time.Hour && strings.Contains(c.Body, checkQuestion) {
 					log.Printf("%s: recently checked", url)
+					commentURL = c.URL
 					continue Issues
 				}
 			}
@@ -353,9 +370,11 @@ Issues:
 			}
 			msg := fmt.Sprintf("%s\n\n%s", checkQuestion, di.Details)
 			// log.Fatalf("wouldpost %s\n%s", url, msg)
-			if err := r.Client.AddIssueComment(issue, msg); err != nil {
+			if url, err := GitHubAddIssueComment(r.Client, issue, msg); err != nil && err != ErrReadOnly {
 				log.Printf("%s: posting comment: %v", url, err)
 				failure = true
+			} else {
+				commentURL = url
 			}
 			log.Printf("posted %s", url)
 		}
@@ -392,9 +411,11 @@ Issues:
 					failure = true
 				}
 			}
-			if err := r.Client.AddIssueComment(issue, msg); err != nil {
+			if url, err := GitHubAddIssueComment(r.Client, issue, msg); err != nil && err != ErrReadOnly {
 				log.Printf("%s: posting comment: %v", url, err)
 				failure = true
+			} else {
+				commentURL = url
 			}
 		}
 
@@ -460,6 +481,30 @@ Issues:
 		setLabel("Proposal-Hold", col == "Hold")
 
 		m.Events = append(m.Events, &Event{Column: col, Issue: fmt.Sprint(di.Number), Title: title, Actions: actions})
+
+		if commentURL == "" {
+			// Search for the latest comment from a committee member.
+			//
+			// TODO: Don't touch the link for "skip" or "discuss". There can be
+			// multiple actions, so this isn't completely straightforward.
+			//
+			// TODO: For status "comment", check that what we find is recent?
+			comments, err := commentsOnce()
+			if err != nil {
+				continue
+			}
+			for i := len(comments) - 1; i >= 0; i-- {
+				c := comments[i]
+				if committeeUsers[c.Author] {
+					commentURL = c.URL
+					break
+				}
+			}
+		}
+
+		if commentURL != "" {
+			commentURLs[di.Number] = commentURL
+		}
 	}
 
 	for id, item := range r.Items {
@@ -478,7 +523,7 @@ Issues:
 	sort.Slice(m.Events, func(i, j int) bool {
 		return m.Events[i].Title < m.Events[j].Title
 	})
-	return m
+	return m, commentURLs
 }
 
 func (r *Reporter) PostMinutes(m *Minutes, issueNum int) {

@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 // GitHubClient wraps the [github.Client] API to provide injection points.
 type GitHubClient interface {
 	GraphQLQuery(query string, vars github.Vars) (*schema.Query, error)
+	GraphQLMutation(query string, vars github.Vars) (*schema.Mutation, error)
 
 	SearchLabels(org string, repo string, query string) ([]*github.Label, error)
 	SearchMilestones(org string, repo string, query string) ([]*github.Milestone, error)
@@ -45,6 +47,13 @@ type GitHubDryClient struct {
 
 func (c *GitHubDryClient) GraphQLQuery(query string, vars github.Vars) (*schema.Query, error) {
 	return c.c.GraphQLQuery(query, vars)
+}
+
+var ErrReadOnly = errors.New("cannot perform mutation on read-only client")
+
+func (c *GitHubDryClient) GraphQLMutation(query string, vars github.Vars) (*schema.Mutation, error) {
+	c.logger.Info("github", "action", "GraphQLMutation", "query", query, "vars", vars)
+	return nil, ErrReadOnly
 }
 
 func (c *GitHubDryClient) SearchLabels(org string, repo string, query string) ([]*github.Label, error) {
@@ -142,4 +151,26 @@ func GitHubUser(c GitHubClient) (string, error) {
 		return "", err
 	}
 	return out.Viewer.Login, nil
+}
+
+// GitHubAddIssueComment is equivalent to [github.Client.AddIssueComment], but
+// returns the URL of the new comment.
+func GitHubAddIssueComment(c GitHubClient, issue *github.Issue, text string) (url string, err error) {
+	graphql := `
+	  mutation($ID: ID!, $Text: String!) {
+	    addComment(input: {subjectId: $ID, body: $Text}) {
+	      clientMutationId
+		  commentEdge {
+			node {
+			  url
+			}
+		  }
+	    }
+	  }
+	`
+	m, err := c.GraphQLMutation(graphql, github.Vars{"ID": issue.ID, "Text": text})
+	if err != nil {
+		return "", err
+	}
+	return string(m.AddComment.CommentEdge.Node.Url), nil
 }

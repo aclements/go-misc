@@ -6,6 +6,8 @@ package main
 
 import (
 	"fmt"
+	"iter"
+	"maps"
 	"os"
 )
 
@@ -27,6 +29,16 @@ func gitWho(who string) string {
 	}
 	fmt.Fprintf(os.Stderr, "warning: unknown attendee %s; assuming GitHub @%s\n", who, who)
 	return "@" + who
+}
+
+var committeeUsers = mapSet(maps.Values(whoMap))
+
+func mapSet[T comparable](values iter.Seq[T]) map[T]bool {
+	m := make(map[T]bool)
+	for value := range values {
+		m[value] = true
+	}
+	return m
 }
 
 var actionMap = map[string]string{

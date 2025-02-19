@@ -5,6 +5,7 @@ go 1.23
 require (
 	golang.org/x/oauth2 v0.21.0
 	google.golang.org/api v0.189.0
+	rsc.io/github v0.5.1-0.20250216154006-6eda34706df1
 )
 
 require (
@@ -32,5 +33,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240722135656-d784300faade // indirect
 	google.golang.org/grpc v1.64.1 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
-	rsc.io/github v0.5.0 // indirect
 )

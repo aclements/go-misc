@@ -545,7 +545,7 @@ func (r *Reporter) PostMinutes(m *Minutes, issueNum int) {
 	}
 	first := true
 	for _, d := range disc {
-		if d.Locked {
+		if d.Locked || d.Closed {
 			continue
 		}
 		if first {

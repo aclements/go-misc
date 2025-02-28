@@ -2,28 +2,23 @@
 
 Go to https://console.developers.google.com/.
 
-Create a new GCP project. I called mine `proposal-minutes`.
+- Create a new GCP project, or use an existing one. I called mine `proposal-minutes`.
+- Go to IAM & Admin > Service Acccounts.
+- Click "+ Create Service Account".
+- Enter a service account name (I used `proposal-minutes`).
+- Enter a description, like `proposal minutes bot`
+- Click "Create and Continue"
+- Skip the "Grant this service account access to project". Click "Continue"
+- Skip the "Grant users access to this service account". Click "Continue".
+- Back at the Service Accounts screen, click on the email address for the new service account,
+  bringing up the "Service account details" page.
+- Click the "Keys" tab.
+- Click "Add Key", then "Create New Key", then "JSON", then "Continue".
+- Copy the downloaded file to to `~/.config/proposal-minutes/gdoc-service.json`
+  (use `~/Library/Application Support/proposal-minutes/gdoc-service.json` on a Mac).
+- Go back to the Details tab and copy the email address for the account, something like `proposal-minutes@proposal-minutes.iam.gserviceaccount.com`.
 
-Configure the OAuth consent screen: Go to APIs & Services > OAuth consent
-screen. Select "Internal" and click "Create". Enter an app name. I called it
-`proposal-minutes`. Fill in other required fields, though most can be left
-blank. Click "Save and continue". You don't need to add any scopes. Click "Save
-and continue".
-
-Enable Google Sheets: Go to APIs & Services > Enabled APIs and Services. Click
-"Enable APIs and Services". Search for the "Google Sheets API" and enable it.
-
-Create OAuth credentials: Go to APIs & Services > Credentials. Click Create
-Credentials > OAuth client ID. Select "Desktop app", give it a name (I used
-`proposal-minutes`, again), and click Create. On the next screen, click
-"Download JSON" and save this file as `~/.config/proposal-minutes/gdoc.json`.
-
-Enable write scope for spreadsheets: Go to APIs & Services > OAuth consent
-screen > Data Access and click "Add or remove scopes". Add the
-`https://www.googleapis.com/auth/spreadsheets` scope, either by finding it in
-the table of known scopes or by manually entering it. Click "Update". Finally,
-click "Save" on the Data Access page. (Note: If you already had a cached OAuth
-token, you'll have to delete it.)
+In the Proposal Minutes v3 spreadsheet, click Share and then add that email address as an editor of the doc.
 
 # Generate GitHub token
 

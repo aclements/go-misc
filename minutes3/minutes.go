@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"rsc.io/github"
+	"rsc.io/github/schema"
 )
 
 var docjson = flag.Bool("docjson", false, "print google doc info in json")
@@ -137,7 +138,7 @@ func NewReporter(dryRun bool) (*Reporter, error) {
 	token = bytes.TrimSpace(token)
 
 	var c GitHubClient
-	c = github.NewClient(string(token))
+	c = githubClient{github.NewClient(string(token))}
 	if dryRun {
 		c = &GitHubDryClient{c, slog.Default()}
 	}
@@ -228,7 +229,7 @@ func (r *Reporter) Update(doc *Doc) (*Minutes, map[int]string) {
 	sort.Strings(m.Who)
 
 	// Get current user's login for constructing messages
-	userName, err := GitHubUser(r.Client)
+	userName, err := r.Client.CurrentUser()
 	if err != nil {
 		log.Fatalf("getting current user: %v", err)
 	}
@@ -370,7 +371,7 @@ Issues:
 			}
 			msg := fmt.Sprintf("%s\n\n%s", checkQuestion, di.Details)
 			// log.Fatalf("wouldpost %s\n%s", url, msg)
-			if url, err := GitHubAddIssueComment(r.Client, issue, msg); err != nil && err != ErrReadOnly {
+			if url, err := r.Client.AddIssueComment(issue, msg); err != nil && err != ErrReadOnly {
 				log.Printf("%s: posting comment: %v", url, err)
 				failure = true
 			} else {
@@ -411,7 +412,7 @@ Issues:
 					failure = true
 				}
 			}
-			if url, err := GitHubAddIssueComment(r.Client, issue, msg); err != nil && err != ErrReadOnly {
+			if url, err := r.Client.AddIssueComment(issue, msg); err != nil && err != ErrReadOnly {
 				log.Printf("%s: posting comment: %v", url, err)
 				failure = true
 			} else {
@@ -449,9 +450,9 @@ Issues:
 			}
 		}
 
-		forceClose := func() {
+		forceCloseAsNotPlanned := func() {
 			if !issue.Closed {
-				if err := r.Client.CloseIssue(issue); err != nil {
+				if err := r.Client.CloseIssue(issue, schema.IssueClosedStateReason_NOT_PLANNED); err != nil {
 					log.Printf("%s: closing issue: %v", url, err)
 					failure = true
 				}
@@ -473,7 +474,7 @@ Issues:
 			}
 		}
 		if col == "Declined" {
-			forceClose()
+			forceCloseAsNotPlanned()
 		}
 
 		setLabel("Proposal-Accepted", col == "Accepted")
@@ -620,7 +621,7 @@ func (r *Reporter) PostMinutes(m *Minutes, issueNum int) {
 
 	// Post minutes
 	log.Printf("posting to minutes #%d", issueNum)
-	if err := r.Client.AddIssueComment(issue, post); err != nil {
+	if _, err := r.Client.AddIssueComment(issue, post); err != nil {
 		log.Fatalf("error posting to minutes #%d: %s", issueNum, err)
 	}
 }

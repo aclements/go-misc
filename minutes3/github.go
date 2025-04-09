@@ -18,15 +18,17 @@ type GitHubClient interface {
 	GraphQLQuery(query string, vars github.Vars) (*schema.Query, error)
 	GraphQLMutation(query string, vars github.Vars) (*schema.Mutation, error)
 
+	CurrentUser() (string, error)
+
 	SearchLabels(org string, repo string, query string) ([]*github.Label, error)
 	SearchMilestones(org string, repo string, query string) ([]*github.Milestone, error)
 
 	Issue(org string, repo string, n int) (*github.Issue, error)
 	IssueComments(issue *github.Issue) ([]*github.IssueComment, error)
-	AddIssueComment(issue *github.Issue, text string) error
+	AddIssueComment(issue *github.Issue, text string) (url string, _ error)
 	AddIssueLabels(issue *github.Issue, labels ...*github.Label) error
 	RemoveIssueLabels(issue *github.Issue, labels ...*github.Label) error
-	CloseIssue(issue *github.Issue) error
+	CloseIssue(issue *github.Issue, reason schema.IssueClosedStateReason) error
 	RetitleIssue(issue *github.Issue, title string) error
 	RemilestoneIssue(issue *github.Issue, milestone *github.Milestone) error
 
@@ -36,6 +38,61 @@ type GitHubClient interface {
 	SetProjectItemFieldOption(project *github.Project, item *github.ProjectItem, field *github.ProjectField, option *github.ProjectFieldOption) error
 
 	Discussions(org string, repo string) ([]*github.Discussion, error)
+}
+
+// githubClient builds on top of the [github.Client] API for the needs of minutes3.
+type githubClient struct{ *github.Client }
+
+// CurrentUser returns the user name of the current user.
+func (c githubClient) CurrentUser() (string, error) {
+	const graphql = `
+	  query {
+	    viewer {
+	      login
+	    }
+	  }
+	`
+	out, err := c.GraphQLQuery(graphql, nil)
+	if err != nil {
+		return "", err
+	}
+	return out.Viewer.Login, nil
+}
+
+// AddIssueComment is equivalent to [github.Client.AddIssueComment],
+// but returns the URL of the new comment.
+func (c githubClient) AddIssueComment(issue *github.Issue, text string) (url string, _ error) {
+	const graphql = `
+	  mutation($ID: ID!, $Text: String!) {
+	    addComment(input: {subjectId: $ID, body: $Text}) {
+	      clientMutationId
+	      commentEdge {
+	        node {
+	          url
+	        }
+	      }
+	    }
+	  }
+	`
+	m, err := c.GraphQLMutation(graphql, github.Vars{"ID": issue.ID, "Text": text})
+	if err != nil {
+		return "", err
+	}
+	return string(m.AddComment.CommentEdge.Node.Url), nil
+}
+
+// CloseIssue is equivalent to [github.Client.CloseIssue],
+// but closes issue with the provided reason.
+func (c githubClient) CloseIssue(issue *github.Issue, reason schema.IssueClosedStateReason) error {
+	const graphql = `
+	  mutation($ID: ID!, $Reason: IssueClosedStateReason) {
+	    closeIssue(input: {issueId: $ID, stateReason: $Reason}) {
+	      clientMutationId
+	    }
+	  }
+	`
+	_, err := c.GraphQLMutation(graphql, github.Vars{"ID": issue.ID, "Reason": reason})
+	return err
 }
 
 // GitHubDryClient is a dry-run client that logs mutation operations without
@@ -56,6 +113,10 @@ func (c *GitHubDryClient) GraphQLMutation(query string, vars github.Vars) (*sche
 	return nil, ErrReadOnly
 }
 
+func (c *GitHubDryClient) CurrentUser() (string, error) {
+	return c.c.CurrentUser()
+}
+
 func (c *GitHubDryClient) SearchLabels(org string, repo string, query string) ([]*github.Label, error) {
 	return c.c.SearchLabels(org, repo, query)
 }
@@ -72,9 +133,9 @@ func (c *GitHubDryClient) IssueComments(issue *github.Issue) ([]*github.IssueCom
 	return c.c.IssueComments(issue)
 }
 
-func (c *GitHubDryClient) AddIssueComment(issue *github.Issue, text string) error {
+func (c *GitHubDryClient) AddIssueComment(issue *github.Issue, text string) (string, error) {
 	c.logger.Info("github", "action", "AddIssueComment", "issue", issue.Number, "text", text)
-	return nil
+	return "", nil
 }
 
 type labelList []*github.Label
@@ -100,8 +161,8 @@ func (c *GitHubDryClient) RemoveIssueLabels(issue *github.Issue, labels ...*gith
 	return nil
 }
 
-func (c *GitHubDryClient) CloseIssue(issue *github.Issue) error {
-	c.logger.Info("github", "action", "CloseIssue", "issue", issue.Number)
+func (c *GitHubDryClient) CloseIssue(issue *github.Issue, reason schema.IssueClosedStateReason) error {
+	c.logger.Info("github", "action", "CloseIssue", "issue", issue.Number, "reason", reason)
 	return nil
 }
 
@@ -135,42 +196,4 @@ func (c *GitHubDryClient) SetProjectItemFieldOption(project *github.Project, ite
 
 func (c *GitHubDryClient) Discussions(org string, repo string) ([]*github.Discussion, error) {
 	return c.c.Discussions(org, repo)
-}
-
-// GitHubUser returns the user name of the current user.
-func GitHubUser(c GitHubClient) (string, error) {
-	query := `
-	query {
-		viewer {
-			login
-		}
-	}
-	`
-	out, err := c.GraphQLQuery(query, nil)
-	if err != nil {
-		return "", err
-	}
-	return out.Viewer.Login, nil
-}
-
-// GitHubAddIssueComment is equivalent to [github.Client.AddIssueComment], but
-// returns the URL of the new comment.
-func GitHubAddIssueComment(c GitHubClient, issue *github.Issue, text string) (url string, err error) {
-	graphql := `
-	  mutation($ID: ID!, $Text: String!) {
-	    addComment(input: {subjectId: $ID, body: $Text}) {
-	      clientMutationId
-		  commentEdge {
-			node {
-			  url
-			}
-		  }
-	    }
-	  }
-	`
-	m, err := c.GraphQLMutation(graphql, github.Vars{"ID": issue.ID, "Text": text})
-	if err != nil {
-		return "", err
-	}
-	return string(m.AddComment.CommentEdge.Node.Url), nil
 }

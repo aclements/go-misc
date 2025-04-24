@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -22,6 +23,18 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
 )
+
+func getOAuthClient(scopes []string) *http.Client {
+	data, err := os.ReadFile(getConfig("gdoc-service.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	cfg, err := google.JWTConfigFromJSON(data, scopes...)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return cfg.Client(oauth2.NoContext)
+}
 
 func getOAuthConfig(scopes []string) *oauth2.Config {
 	// Read the "client" (application) config.
@@ -98,8 +111,7 @@ func parseDoc(docID string) *Doc {
 			// There's no way to limit this to just one doc! >:(
 			"https://www.googleapis.com/auth/spreadsheets",
 		}
-		config := getOAuthConfig(scopes)
-		client := makeOAuthClient(getCacheDir(), config)
+		client := getOAuthClient(scopes)
 		srv, err := sheets.NewService(context.Background(), option.WithHTTPClient(client))
 		if err != nil {
 			log.Fatalf("Unable to retrieve Docs client: %v", err)

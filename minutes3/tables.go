@@ -17,6 +17,7 @@ var whoMap = map[string]string{
 	"Austin": "aclements",
 	"Brad":   "bradfitz",
 	"Cherry": "cherrymui",
+	"Damien": "neild",
 	"Ian":    "ianlancetaylor",
 	"Robert": "griesemer",
 	"Roland": "rolandshoemaker",

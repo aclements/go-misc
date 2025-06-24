@@ -95,12 +95,115 @@ func (c githubClient) CloseIssue(issue *github.Issue, reason schema.IssueClosedS
 	return err
 }
 
-// GitHubDryClient is a dry-run client that logs mutation operations without
-// performing them.
-type GitHubDryClient struct {
+// GitHubLogger is a GitHubClient that logs all mutation operations and
+// delegates all actions to an underlying client.
+type GitHubLogger struct {
 	c      GitHubClient
 	logger *slog.Logger
 }
+
+var _ GitHubClient = (*GitHubLogger)(nil)
+
+func (c *GitHubLogger) GraphQLQuery(query string, vars github.Vars) (*schema.Query, error) {
+	return c.c.GraphQLQuery(query, vars)
+}
+
+func (c *GitHubLogger) GraphQLMutation(query string, vars github.Vars) (*schema.Mutation, error) {
+	c.logger.Info("github", "action", "GraphQLMutation", "query", query, "vars", vars)
+	return c.c.GraphQLMutation(query, vars)
+}
+
+func (c *GitHubLogger) CurrentUser() (string, error) {
+	return c.c.CurrentUser()
+}
+
+func (c *GitHubLogger) SearchLabels(org string, repo string, query string) ([]*github.Label, error) {
+	return c.c.SearchLabels(org, repo, query)
+}
+
+func (c *GitHubLogger) SearchMilestones(org string, repo string, query string) ([]*github.Milestone, error) {
+	return c.c.SearchMilestones(org, repo, query)
+}
+
+func (c *GitHubLogger) Issue(org string, repo string, n int) (*github.Issue, error) {
+	return c.c.Issue(org, repo, n)
+}
+
+func (c *GitHubLogger) IssueComments(issue *github.Issue) ([]*github.IssueComment, error) {
+	return c.c.IssueComments(issue)
+}
+
+func (c *GitHubLogger) AddIssueComment(issue *github.Issue, text string) (string, error) {
+	c.logger.Info("github", "action", "AddIssueComment", "issue", issue.Number, "text", text)
+	return c.c.AddIssueComment(issue, text)
+}
+
+type labelList []*github.Label
+
+func (ll labelList) String() string {
+	var b strings.Builder
+	for i, l := range ll {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(l.Name)
+	}
+	return b.String()
+}
+
+func (c *GitHubLogger) AddIssueLabels(issue *github.Issue, labels ...*github.Label) error {
+	c.logger.Info("github", "action", "AddIssueLabels", "issue", issue.Number, "labels", labelList(labels))
+	return c.c.AddIssueLabels(issue, labels...)
+}
+
+func (c *GitHubLogger) RemoveIssueLabels(issue *github.Issue, labels ...*github.Label) error {
+	c.logger.Info("github", "action", "RemoveIssueLabels", "issue", issue.Number, "labels", labelList(labels))
+	return c.c.RemoveIssueLabels(issue, labels...)
+}
+
+func (c *GitHubLogger) CloseIssue(issue *github.Issue, reason schema.IssueClosedStateReason) error {
+	c.logger.Info("github", "action", "CloseIssue", "issue", issue.Number, "reason", reason)
+	return c.c.CloseIssue(issue, reason)
+}
+
+func (c *GitHubLogger) RetitleIssue(issue *github.Issue, title string) error {
+	c.logger.Info("github", "action", "RetitleIssue", "issue", issue.Number, "title", title)
+	return c.c.RetitleIssue(issue, title)
+}
+
+func (c *GitHubLogger) RemilestoneIssue(issue *github.Issue, milestone *github.Milestone) error {
+	c.logger.Info("github", "action", "RemilestoneIssue", "issue", issue.Number, "milestone", milestone.Title)
+	return c.c.RemilestoneIssue(issue, milestone)
+}
+
+func (c *GitHubLogger) Projects(org string, query string) ([]*github.Project, error) {
+	return c.c.Projects(org, query)
+}
+
+func (c *GitHubLogger) ProjectItems(p *github.Project) ([]*github.ProjectItem, error) {
+	return c.c.ProjectItems(p)
+}
+
+func (c *GitHubLogger) DeleteProjectItem(project *github.Project, item *github.ProjectItem) error {
+	c.logger.Info("github", "action", "DeleteProjectItem", "project", project.Title, "item", item.Issue.Number)
+	return c.c.DeleteProjectItem(project, item)
+}
+
+func (c *GitHubLogger) SetProjectItemFieldOption(project *github.Project, item *github.ProjectItem, field *github.ProjectField, option *github.ProjectFieldOption) error {
+	c.logger.Info("github", "action", "SetProjectItemFieldOption", "project", project.Title, "item", item.Issue.Number, "field", field.Name, "option", option.Name)
+	return c.c.SetProjectItemFieldOption(project, item, field, option)
+}
+
+func (c *GitHubLogger) Discussions(org string, repo string) ([]*github.Discussion, error) {
+	return c.c.Discussions(org, repo)
+}
+
+// GitHubDryClient is a dry-run client that rejects mutation operations.
+type GitHubDryClient struct {
+	c GitHubClient
+}
+
+var _ GitHubClient = (*GitHubDryClient)(nil)
 
 func (c *GitHubDryClient) GraphQLQuery(query string, vars github.Vars) (*schema.Query, error) {
 	return c.c.GraphQLQuery(query, vars)
@@ -109,7 +212,7 @@ func (c *GitHubDryClient) GraphQLQuery(query string, vars github.Vars) (*schema.
 var ErrReadOnly = errors.New("cannot perform mutation on read-only client")
 
 func (c *GitHubDryClient) GraphQLMutation(query string, vars github.Vars) (*schema.Mutation, error) {
-	c.logger.Info("github", "action", "GraphQLMutation", "query", query, "vars", vars)
+	// No logging here, as GitHubLogger will handle it.
 	return nil, ErrReadOnly
 }
 
@@ -134,45 +237,26 @@ func (c *GitHubDryClient) IssueComments(issue *github.Issue) ([]*github.IssueCom
 }
 
 func (c *GitHubDryClient) AddIssueComment(issue *github.Issue, text string) (string, error) {
-	c.logger.Info("github", "action", "AddIssueComment", "issue", issue.Number, "text", text)
 	return "", nil
 }
 
-type labelList []*github.Label
-
-func (ll labelList) String() string {
-	var b strings.Builder
-	for i, l := range ll {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(l.Name)
-	}
-	return b.String()
-}
-
 func (c *GitHubDryClient) AddIssueLabels(issue *github.Issue, labels ...*github.Label) error {
-	c.logger.Info("github", "action", "AddIssueLabels", "issue", issue.Number, "labels", labelList(labels))
 	return nil
 }
 
 func (c *GitHubDryClient) RemoveIssueLabels(issue *github.Issue, labels ...*github.Label) error {
-	c.logger.Info("github", "action", "RemoveIssueLabels", "issue", issue.Number, "labels", labelList(labels))
 	return nil
 }
 
 func (c *GitHubDryClient) CloseIssue(issue *github.Issue, reason schema.IssueClosedStateReason) error {
-	c.logger.Info("github", "action", "CloseIssue", "issue", issue.Number, "reason", reason)
 	return nil
 }
 
 func (c *GitHubDryClient) RetitleIssue(issue *github.Issue, title string) error {
-	c.logger.Info("github", "action", "RetitleIssue", "issue", issue.Number, "title", title)
 	return nil
 }
 
 func (c *GitHubDryClient) RemilestoneIssue(issue *github.Issue, milestone *github.Milestone) error {
-	c.logger.Info("github", "action", "RemilestoneIssue", "issue", issue.Number, "milestone", milestone.Title)
 	return nil
 }
 
@@ -185,12 +269,10 @@ func (c *GitHubDryClient) ProjectItems(p *github.Project) ([]*github.ProjectItem
 }
 
 func (c *GitHubDryClient) DeleteProjectItem(project *github.Project, item *github.ProjectItem) error {
-	c.logger.Info("github", "action", "DeleteProjectItem", "project", project.Title, "item", item.Issue.Number)
 	return nil
 }
 
 func (c *GitHubDryClient) SetProjectItemFieldOption(project *github.Project, item *github.ProjectItem, field *github.ProjectField, option *github.ProjectFieldOption) error {
-	c.logger.Info("github", "action", "SetProjectItemFieldOption", "project", project.Title, "item", item.Issue.Number, "field", field.Name, "option", option.Name)
 	return nil
 }
 

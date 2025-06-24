@@ -32,6 +32,7 @@ var docjson = flag.Bool("docjson", false, "print google doc info in json")
 var doccsv = flag.Bool("doccsv", false, "print google doc info in csv")
 var apply = flag.Bool("apply", false, "perform actions")
 var testSheet = flag.String("test-sheet", "", "use sheet doc `id` for testing")
+var flagV = flag.Bool("v", false, "log all GitHub actions")
 
 var failure = false
 
@@ -140,7 +141,10 @@ func NewReporter(dryRun bool) (*Reporter, error) {
 	var c GitHubClient
 	c = githubClient{github.NewClient(string(token))}
 	if dryRun {
-		c = &GitHubDryClient{c, slog.Default()}
+		c = &GitHubDryClient{c}
+	}
+	if *flagV {
+		c = &GitHubLogger{c, slog.Default()}
 	}
 
 	r := &Reporter{Client: c}

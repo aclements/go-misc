@@ -15,6 +15,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -243,6 +244,93 @@ func parseDoc(docID string) *Doc {
 	}
 
 	return d
+}
+
+func (di *Issue) URL() string {
+	return "https://go.dev/issue/" + fmt.Sprint(di.Number)
+}
+
+func (di *Issue) parseActions() (col string, reason string, check bool, actions []string) {
+	actions = strings.Split(di.Minutes, ";")
+	if len(actions) == 1 && actions[0] == "" {
+		actions = nil
+	}
+	if len(actions) == 0 {
+		log.Printf("#%d missing action", di.Number)
+		failure = true
+		return "", "", false, nil
+	}
+
+	col = "Active"
+	reason = ""
+	check = false
+	for i, a := range actions {
+		a = strings.TrimSpace(a)
+		actions[i] = a
+		switch a {
+		case "TODO":
+			log.Printf("%s: minutes TODO", di.URL())
+			failure = true
+			return "", "", false, nil
+		case "accept":
+			a = "accepted"
+		case "decline":
+			a = "declined"
+		case "retract":
+			a = "retracted"
+		case "declined as infeasible":
+			a = "infeasible"
+		case "check":
+			check = true
+			a = "comment"
+		}
+
+		switch a {
+		case "likely accept":
+			col = "Likely Accept"
+		case "likely decline":
+			col = "Likely Decline"
+		case "accepted":
+			col = "Accepted"
+		case "declined":
+			col = "Declined"
+		case "retracted":
+			col = "Declined"
+			reason = "retracted"
+		case "unhold":
+			col = "Active"
+			reason = "unhold"
+		}
+		if strings.HasPrefix(a, "declined") {
+			col = "Declined"
+		}
+		if strings.HasPrefix(a, "duplicate") {
+			col = "Declined"
+			reason = "duplicate"
+		}
+		if strings.Contains(a, "infeasible") {
+			col = "Declined"
+			reason = "infeasible"
+		}
+		if a == "obsolete" || strings.Contains(a, "obsoleted") {
+			col = "Declined"
+			reason = "obsolete"
+		}
+		if strings.HasPrefix(a, "closed") {
+			col = "Declined"
+		}
+		if strings.HasPrefix(a, "hold") || a == "on hold" {
+			col = "Hold"
+		}
+		if r := actionMap[a]; r != "" {
+			actions[i] = r
+		}
+		if strings.HasPrefix(a, "removed") {
+			col = "none"
+			reason = "removed"
+		}
+	}
+	return
 }
 
 // FinishDoc performs post-minutes updates to the Doc.

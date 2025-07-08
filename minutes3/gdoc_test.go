@@ -17,77 +17,81 @@ func TestParseActions(t *testing.T) {
 add:
   col: "Active"
   reason: ""
-  actions: ["added to minutes"]
+  minutes: "added to minutes"
 skip:
   col: "Active"
   reason: ""
-  actions: ["discussion ongoing"]
+  minutes: "discussion ongoing"
 discuss:
   col: "Active"
   reason: ""
-  actions: ["discussion ongoing"]
+  minutes: "discussion ongoing"
 comment:
   col: "Active"
   reason: ""
-  actions: ["commented"]
+  minutes: "commented"
 check:
   col: "Active"
   reason: ""
-  actions: ["commented"]
+  minutes: "commented"
   check
 hold:
   col: "Hold"
   reason: ""
-  actions: ["put on hold"]
+  minutes: "put on hold"
 likely accept:
   col: "Likely Accept"
   reason: ""
-  actions: ["**likely accept**; last call for comments ⏳"]
+  minutes: "**likely accept**; last call for comments ⏳"
 accept:
   col: "Accepted"
   reason: ""
-  actions: ["no change in consensus; **accepted** 🎉"]
+  minutes: "no change in consensus; **accepted** 🎉"
 likely decline:
   col: "Likely Decline"
   reason: ""
-  actions: ["**likely decline**; last call for comments ⏳"]
+  minutes: "**likely decline**; last call for comments ⏳"
 decline:
   col: "Declined"
   reason: ""
-  actions: ["no change in consensus; **declined**"]
+  minutes: "no change in consensus; **declined**"
 duplicate:
   col: "Declined"
   reason: "duplicate"
-  actions: ["duplicate"]
+  minutes: "duplicate"
 retracted:
   col: "Declined"
   reason: "retracted"
-  actions: ["proposal retracted by author; **declined**"]
+  minutes: "proposal retracted by author; **declined**"
 infeasible:
   col: "Declined"
   reason: "infeasible"
-  actions: ["declined as infeasible"]
+  minutes: "declined as infeasible"
 obsolete:
   col: "Declined"
   reason: "obsolete"
-  actions: ["obsolete"]
+  minutes: "obsolete"
 removed:
   col: "none"
   reason: "removed"
-  actions: ["removed from proposal process"]
+  minutes: "removed from proposal process"
 hold for #1234:
   col: "Hold"
   reason: ""
-  actions: ["hold for #1234"]
+  minutes: "hold for #1234"
 `
 	want = strings.TrimPrefix(want, "\n")
 
 	var got strings.Builder
 	check := func(a string) {
 		di := Issue{Minutes: a}
-		col, reason, check, actions := di.parseActions()
-		fmt.Fprintf(&got, "%s:\n  col: %q\n  reason: %q\n  actions: %q\n", a, col, reason, actions)
-		if check {
+		act, err := di.parseActions()
+		if err != nil {
+			t.Errorf("%s: %s", a, err)
+			return
+		}
+		fmt.Fprintf(&got, "%s:\n  col: %q\n  reason: %q\n  minutes: %q\n", a, act.col, act.reason, act.minutes)
+		if act.isCheck {
 			fmt.Fprintf(&got, "  check\n")
 		}
 	}

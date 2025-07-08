@@ -258,6 +258,7 @@ type action struct {
 }
 
 var sheetActions = map[string]action{
+	// Active states
 	"add": {
 		col:     "Active",
 		minutes: "added to minutes",
@@ -279,10 +280,14 @@ var sheetActions = map[string]action{
 		isCheck: true,
 		minutes: "commented",
 	},
+
+	// Hold states
 	"hold": {
 		col:     "Hold",
 		minutes: "put on hold",
 	},
+
+	// Accept states
 	"likely accept": {
 		col:     "Likely Accept",
 		minutes: "**likely accept**; last call for comments ⏳",
@@ -291,6 +296,8 @@ var sheetActions = map[string]action{
 		col:     "Accepted",
 		minutes: "no change in consensus; **accepted** 🎉",
 	},
+
+	// Decline states
 	"likely decline": {
 		col:     "Likely Decline",
 		minutes: "**likely decline**; last call for comments ⏳",
@@ -319,6 +326,8 @@ var sheetActions = map[string]action{
 		reason:  "obsolete",
 		minutes: "obsolete",
 	},
+
+	// Misc
 	"removed": {
 		col:     "none",
 		reason:  "removed",
@@ -326,9 +335,8 @@ var sheetActions = map[string]action{
 	},
 }
 
-func (di *Issue) parseActions() (col string, reason string, check bool, actions []string) {
+func (di *Issue) parseActions() (a action, err error) {
 	key := strings.TrimSpace(di.Minutes)
-	var a action
 
 	// TODO: Remove "skip" action and just use a blank.
 
@@ -339,17 +347,14 @@ func (di *Issue) parseActions() (col string, reason string, check bool, actions 
 	if strings.HasPrefix(key, "hold ") {
 		a = sheetActions["hold"]
 		a.minutes = key
-	} else {
-		var ok bool
-		a, ok = sheetActions[key]
-		if !ok {
-			log.Printf("#%d unknown action %q", di.Number, key)
-			failure = true
-			return "", "", false, nil
-		}
+		return a, nil
 	}
-	// TODO: Just return action
-	return a.col, a.reason, a.isCheck, []string{a.minutes}
+
+	if a, ok := sheetActions[key]; ok {
+		return a, nil
+	}
+
+	return action{}, fmt.Errorf("#%d unknown action %q", di.Number, key)
 }
 
 // FinishDoc performs post-minutes updates to the Doc.

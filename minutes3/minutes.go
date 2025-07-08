@@ -267,9 +267,11 @@ Issues:
 		}
 
 		url := di.URL()
-		col, reason, check, actions := di.parseActions()
-		if len(actions) == 0 {
-			continue Issues
+		action, err := di.parseActions()
+		if err != nil {
+			log.Printf("#%d: %s", di.Number, err)
+			failure = true
+			continue
 		}
 
 		commentsOnce := sync.OnceValues(func() ([]*github.IssueComment, error) {
@@ -281,7 +283,7 @@ Issues:
 			return comments, err
 		})
 
-		if check {
+		if action.isCheck {
 			comments, err := commentsOnce()
 			if err != nil {
 				continue
@@ -311,12 +313,12 @@ Issues:
 			log.Printf("posted %s", url)
 		}
 
-		if status.Option.Name != col {
-			msg := updateMsg(status.Option.Name, col, reason, userName)
+		if status.Option.Name != action.col {
+			msg := updateMsg(status.Option.Name, action.col, action.reason, userName)
 			if msg == "" {
-				log.Fatalf("no update message for %s", col)
+				log.Fatalf("no update message for %s", action.col)
 			}
-			if col == "Likely Accept" || col == "Accepted" {
+			if action.col == "Likely Accept" || action.col == "Accepted" {
 				if di.Details == "" {
 					log.Printf("%s: missing proposal details", url)
 					failure = true
@@ -325,21 +327,21 @@ Issues:
 				msg += "\n\n" + di.Details
 			}
 			f := r.Proposals.FieldByName("Status")
-			if col == "none" {
+			if action.col == "none" {
 				if err := r.Client.DeleteProjectItem(r.Proposals, item); err != nil {
 					log.Printf("%s: deleting proposal item: %v", url, err)
 					failure = true
 					continue
 				}
 			} else {
-				o := f.OptionByName(col)
+				o := f.OptionByName(action.col)
 				if o == nil {
-					log.Printf("%s: moving from %s to %s: no such status\n", url, status.Option.Name, col)
+					log.Printf("%s: moving from %s to %s: no such status\n", url, status.Option.Name, action.col)
 					failure = true
 					continue
 				}
 				if err := r.Client.SetProjectItemFieldOption(r.Proposals, item, f, o); err != nil {
-					log.Printf("%s: moving from %s to %s: %v\n", url, status.Option.Name, col, err)
+					log.Printf("%s: moving from %s to %s: %v\n", url, status.Option.Name, action.col, err)
 					failure = true
 				}
 			}
@@ -390,7 +392,7 @@ Issues:
 			}
 		}
 
-		if col == "Accepted" {
+		if action.col == "Accepted" {
 			if strings.HasPrefix(issue.Title, "proposal:") {
 				if err := r.Client.RetitleIssue(issue, title); err != nil {
 					log.Printf("%s: retitling: %v", url, err)
@@ -404,15 +406,15 @@ Issues:
 				}
 			}
 		}
-		if col == "Declined" {
+		if action.col == "Declined" {
 			forceCloseAsNotPlanned()
 		}
 
-		setLabel("Proposal-Accepted", col == "Accepted")
-		setLabel("Proposal-FinalCommentPeriod", col == "Likely Accept" || col == "Likely Decline")
-		setLabel("Proposal-Hold", col == "Hold")
+		setLabel("Proposal-Accepted", action.col == "Accepted")
+		setLabel("Proposal-FinalCommentPeriod", action.col == "Likely Accept" || action.col == "Likely Decline")
+		setLabel("Proposal-Hold", action.col == "Hold")
 
-		m.Events = append(m.Events, &Event{Column: col, Issue: fmt.Sprint(di.Number), Title: title, Actions: actions})
+		m.Events = append(m.Events, &Event{Column: action.col, Issue: fmt.Sprint(di.Number), Title: title, Actions: []string{action.minutes}})
 
 		if commentURL == "" {
 			// Search for the latest comment from a committee member.

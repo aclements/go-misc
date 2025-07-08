@@ -42,22 +42,6 @@ func mapSet[T comparable](values iter.Seq[T]) map[T]bool {
 	return m
 }
 
-var actionMap = map[string]string{
-	"accepted":       "no change in consensus; **accepted** 🎉",
-	"declined":       "no change in consensus; **declined**",
-	"retracted":      "proposal retracted by author; **declined**",
-	"hold":           "put on hold",
-	"on hold":        "put on hold",
-	"unhold":         "taken off hold",
-	"likely accept":  "**likely accept**; last call for comments ⏳",
-	"likely decline": "**likely decline**; last call for comments ⏳",
-	"discuss":        "discussion ongoing",
-	"add":            "added to minutes",
-	"removed":        "removed from proposal process",
-	"comment":        "commented",
-	"infeasible":     "declined as infeasible",
-}
-
 // There's also "check", which is mapped to "comment" plus posting the proposal
 // details.
 

@@ -250,87 +250,106 @@ func (di *Issue) URL() string {
 	return "https://go.dev/issue/" + fmt.Sprint(di.Number)
 }
 
-func (di *Issue) parseActions() (col string, reason string, check bool, actions []string) {
-	actions = strings.Split(di.Minutes, ";")
-	if len(actions) == 1 && actions[0] == "" {
-		actions = nil
-	}
-	if len(actions) == 0 {
-		log.Printf("#%d missing action", di.Number)
-		failure = true
-		return "", "", false, nil
-	}
+type action struct {
+	col     string // New proposal project column
+	reason  string // Optional reason for declining; key in [updateMsgs] for detailed issue post
+	isCheck bool   // Perform "check" post to issue
+	minutes string // Short summary to post to minutes issue
+}
 
-	col = "Active"
-	reason = ""
-	check = false
-	for i, a := range actions {
-		a = strings.TrimSpace(a)
-		actions[i] = a
-		switch a {
-		case "TODO":
-			log.Printf("%s: minutes TODO", di.URL())
+var sheetActions = map[string]action{
+	"add": {
+		col:     "Active",
+		minutes: "added to minutes",
+	},
+	"skip": {
+		col:     "Active",
+		minutes: "discussion ongoing",
+	},
+	"discuss": {
+		col:     "Active",
+		minutes: "discussion ongoing",
+	},
+	"comment": {
+		col:     "Active",
+		minutes: "commented",
+	},
+	"check": {
+		col:     "Active",
+		isCheck: true,
+		minutes: "commented",
+	},
+	"hold": {
+		col:     "Hold",
+		minutes: "put on hold",
+	},
+	"likely accept": {
+		col:     "Likely Accept",
+		minutes: "**likely accept**; last call for comments ⏳",
+	},
+	"accept": {
+		col:     "Accepted",
+		minutes: "no change in consensus; **accepted** 🎉",
+	},
+	"likely decline": {
+		col:     "Likely Decline",
+		minutes: "**likely decline**; last call for comments ⏳",
+	},
+	"decline": {
+		col:     "Declined",
+		minutes: "no change in consensus; **declined**",
+	},
+	"duplicate": {
+		col:     "Declined",
+		reason:  "duplicate",
+		minutes: "duplicate",
+	},
+	"retracted": {
+		col:     "Declined",
+		reason:  "retracted",
+		minutes: "proposal retracted by author; **declined**",
+	},
+	"infeasible": {
+		col:     "Declined",
+		reason:  "infeasible",
+		minutes: "declined as infeasible",
+	},
+	"obsolete": {
+		col:     "Declined",
+		reason:  "obsolete",
+		minutes: "obsolete",
+	},
+	"removed": {
+		col:     "none",
+		reason:  "removed",
+		minutes: "removed from proposal process",
+	},
+}
+
+func (di *Issue) parseActions() (col string, reason string, check bool, actions []string) {
+	key := strings.TrimSpace(di.Minutes)
+	var a action
+
+	// TODO: Remove "skip" action and just use a blank.
+
+	// TODO: We no longer use the "unhold" ("taken off hold") action; we
+	// should infer that from the previous state.
+
+	// Special cases
+	if strings.HasPrefix(key, "hold ") {
+		a = sheetActions["hold"]
+		a.minutes = key
+	} else {
+		var ok bool
+		a, ok = sheetActions[key]
+		if !ok {
+			log.Printf("#%d unknown action %q", di.Number, key)
 			failure = true
 			return "", "", false, nil
-		case "accept":
-			a = "accepted"
-		case "decline":
-			a = "declined"
-		case "retract":
-			a = "retracted"
-		case "declined as infeasible":
-			a = "infeasible"
-		case "check":
-			check = true
-			a = "comment"
-		}
-
-		switch a {
-		case "likely accept":
-			col = "Likely Accept"
-		case "likely decline":
-			col = "Likely Decline"
-		case "accepted":
-			col = "Accepted"
-		case "declined":
-			col = "Declined"
-		case "retracted":
-			col = "Declined"
-			reason = "retracted"
-		case "unhold":
-			col = "Active"
-			reason = "unhold"
-		}
-		if strings.HasPrefix(a, "declined") {
-			col = "Declined"
-		}
-		if strings.HasPrefix(a, "duplicate") {
-			col = "Declined"
-			reason = "duplicate"
-		}
-		if strings.Contains(a, "infeasible") {
-			col = "Declined"
-			reason = "infeasible"
-		}
-		if a == "obsolete" || strings.Contains(a, "obsoleted") {
-			col = "Declined"
-			reason = "obsolete"
-		}
-		if strings.HasPrefix(a, "closed") {
-			col = "Declined"
-		}
-		if strings.HasPrefix(a, "hold") || a == "on hold" {
-			col = "Hold"
-		}
-		if r := actionMap[a]; r != "" {
-			actions[i] = r
-		}
-		if strings.HasPrefix(a, "removed") {
-			col = "none"
-			reason = "removed"
 		}
 	}
-	return
+	// TODO: Just return action
+	return a.col, a.reason, a.isCheck, []string{a.minutes}
 }
 
 // FinishDoc performs post-minutes updates to the Doc.

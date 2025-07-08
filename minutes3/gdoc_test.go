@@ -21,7 +21,7 @@ add:
 skip:
   col: "Active"
   reason: ""
-  actions: ["skip"]
+  actions: ["discussion ongoing"]
 discuss:
   col: "Active"
   reason: ""

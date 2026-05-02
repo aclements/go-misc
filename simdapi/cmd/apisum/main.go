@@ -13,12 +13,16 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"fmt"
 	"go/ast"
 	"go/doc"
 	"go/format"
 	"go/parser"
 	"go/token"
 	"log"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -206,8 +210,30 @@ func (m *MethodMeta) NormOptions() NormOptions {
 }
 
 func main() {
-	// TODO: Take the package directory on the command line, defaulting to `go env GOROOT`
-	pkgDir := "/home/austin/go.tmp/src/simd/archsimd"
+	flag.Usage = func() {
+		out := flag.CommandLine.Output()
+		fmt.Fprintf(out, "Usage: %s [pkgDir]\n\n", os.Args[0])
+		fmt.Fprintf(out, "Parses and aggregates Go SIMD vector and mask type signatures.\n\n")
+		fmt.Fprintf(out, "Arguments:\n")
+		fmt.Fprintf(out, "  pkgDir   Path to the internal archsimd package. Defaults to $GOROOT/src/simd/archsimd.\n")
+	}
+
+	flag.Parse()
+	if flag.NArg() > 1 {
+		flag.Usage()
+		os.Exit(2)
+	}
+
+	pkgDir := flag.Arg(0)
+	if pkgDir == "" {
+		out, err := exec.Command("go", "env", "GOROOT").Output()
+		if err != nil {
+			log.Fatalf("Failed to get GOROOT: %v", err)
+		}
+		goroot := strings.TrimSpace(string(out))
+		pkgDir = filepath.Join(goroot, "src", "simd", "archsimd")
+	}
+
 	fset, docPkg := parsePkg(pkgDir)
 	typeMap := parseFuncs(docPkg, fset)
 	methods := normalizeMethods(typeMap, fset)

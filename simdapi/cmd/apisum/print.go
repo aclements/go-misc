@@ -16,8 +16,6 @@ type UnifiedMethod struct {
 	// NormName is the normalized operation name shared across merged implementations.
 	NormName string
 	// NormSig is the normalized signature string shared across merged implementations.
-	//
-	// TODO: Why do we get a space between the function name and argment list?
 	NormSig string
 	// IsMethod is true if this operation belongs to a receiver type rather than a standalone package function.
 	IsMethod bool
@@ -125,9 +123,9 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 		fmt.Printf("## %s\n\n", bName)
 
 		for _, method := range activeMethods {
-			sig := method.NormSig
+			sig := strings.TrimSpace(method.NormSig)
 			if after, ok := strings.CutPrefix(sig, "func"); ok {
-				sig = after
+				sig = strings.TrimSpace(after)
 			}
 
 			basesMap := make(map[string]bool)
@@ -183,7 +181,7 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 			if method.IsMethod {
 				prefix = "T."
 			}
-			fmt.Printf("### `%s%s %s`\n\n", prefix, method.NormName, sig)
+			fmt.Printf("### `%s%s%s`\n\n", prefix, method.NormName, sig)
 
 			fmt.Print("| Width |")
 			for _, b := range activeBases {

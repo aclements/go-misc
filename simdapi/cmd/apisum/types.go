@@ -1,18 +1,20 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 type ParsedType struct {
-	Kind  TypeKind
-	Name  string
-	Base  string // Uint, Int, Float, Mask (even for basic types)
-	Bits  int    // Element bit width
-	Lanes int    // Lanes; 1 for basic type
+	Kind TypeKind
+
+	// Base is Uint, Int, Float, Mask, uint, int, float
+
+	NormString
 }
 
 type TypeKind string
@@ -24,33 +26,110 @@ const (
 )
 
 var (
-	pureVecRegex = regexp.MustCompile(`^(Int|Uint|Float)(8|16|32|64)x(2|4|8|16|32|64)$`)
+	vecRegex   = regexp.MustCompile(`^(?<B>Int|Uint|Float|Mask)(?<N>8|16|32|64)x(?<L>2|4|8|16|32|64)$`)
+	basicRegex = regexp.MustCompile(`^(?<B>int|uint|float)(?<N>8|16|32|64)$`)
 )
 
 func parseType(name string) ParsedType {
-	if m := pureVecRegex.FindStringSubmatch(name); len(m) > 1 {
-		bits, _ := strconv.Atoi(m[2])
-		lanes, _ := strconv.Atoi(m[3])
-		return ParsedType{Kind: TypeVec, Name: name, Base: m[1], Bits: bits, Lanes: lanes}
+	if ns, ok := NewNormString(name, vecRegex); ok {
+		switch ns.Base() {
+		case "Mask":
+			return ParsedType{Kind: TypeMask, NormString: ns}
+		default:
+			return ParsedType{Kind: TypeVec, NormString: ns}
+		}
 	}
-	if m := pureMaskRegex.FindStringSubmatch(name); len(m) > 1 {
-		bits, _ := strconv.Atoi(m[1])
-		lanes, _ := strconv.Atoi(m[2])
-		return ParsedType{Kind: TypeMask, Name: name, Base: "Mask", Bits: bits, Lanes: lanes}
+	if ns, ok := NewNormString(name, basicRegex); ok {
+		return ParsedType{Kind: TypeBasic, NormString: ns}
 	}
-	if m := basicRegex.FindStringSubmatch(name); len(m) > 1 {
-		bits, _ := strconv.Atoi(m[2])
-		base := strings.ToUpper(m[1][:1]) + m[1][1:]
-		return ParsedType{Kind: TypeBasic, Name: name, Base: base, Bits: bits, Lanes: 1}
-	}
-	return ParsedType{Name: name}
+	return ParsedType{NormString: NormString{String: name}}
 }
 
-// getElemType returns the basic Go type representing an element of t.
-func (t *ParsedType) getElemType() string {
-	switch t.Base {
-	case "Int", "Uint", "Float":
-		return fmt.Sprintf("%s%d", strings.ToLower(t.Base), t.Bits)
+// NormString is a string with marked fields for base type (B), element bits
+// (N), and lanes (L).
+type NormString struct {
+	String  string
+	B, N, L []int // nil or start,end indexes
+}
+
+func NewNormString(s string, re *regexp.Regexp) (NormString, bool) {
+	m := re.FindStringSubmatchIndex(s)
+	if m == nil {
+		return NormString{}, false
 	}
-	return ""
+	ns := NormString{String: s}
+	for i, name := range re.SubexpNames() {
+		switch name {
+		case "B":
+			ns.B = m[i*2:][:2]
+		case "N":
+			ns.N = m[i*2:][:2]
+		case "L":
+			ns.L = m[i*2:][:2]
+		case "":
+		default:
+			panic(fmt.Sprintf("unknown subexpression name %q", name))
+		}
+	}
+	return ns, true
+}
+
+func (n NormString) Base() string {
+	if n.B == nil {
+		return ""
+	}
+	return n.String[n.B[0]:n.B[1]]
+}
+
+func (n NormString) ElemBits() int {
+	if n.N == nil {
+		return 1
+	}
+	x, _ := strconv.Atoi(n.String[n.N[0]:n.N[1]])
+	return x
+}
+
+func (n NormString) Lanes() int {
+	if n.L == nil {
+		return 1
+	}
+	x, _ := strconv.Atoi(n.String[n.L[0]:n.L[1]])
+	return x
+}
+
+// With replaces B, N, and L in the input string. Any of these can be "",
+// indicating no replacement.
+func (n NormString) With(B, N, L string) string {
+	type part struct {
+		idx  []int
+		repl string
+	}
+	var parts []part
+	addPart := func(name string, idx []int, repl string) {
+		if repl == "" {
+			return
+		}
+		if idx == nil {
+			panic(fmt.Sprintf("cannot replace %s missing from %q", name, n.String))
+		}
+		parts = append(parts, part{idx, repl})
+	}
+	addPart("B", n.B, B)
+	addPart("N", n.N, N)
+	addPart("L", n.L, L)
+	if len(parts) == 0 {
+		return n.String
+	}
+	slices.SortFunc(parts, func(a, b part) int {
+		return cmp.Compare(a.idx[0], b.idx[0])
+	})
+	var buf strings.Builder
+	last := 0
+	for _, part := range parts {
+		buf.WriteString(n.String[last:part.idx[0]])
+		buf.WriteString(part.repl)
+		last = part.idx[1]
+	}
+	buf.WriteString(n.String[last:])
+	return buf.String()
 }

@@ -2,32 +2,33 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 )
 
 type UnifiedMethod struct {
+	// Ex is an example method for this group. NormName, NormSig, and IsMethod must match this.
+	Ex *NormalizedMethod
 	// NormName is the normalized operation name shared across merged implementations.
 	NormName string
 	// NormSig is the normalized signature string shared across merged implementations.
+	//
+	// TODO: Why do we get a space between the function name and argment list?
 	NormSig string
 	// IsMethod is true if this operation belongs to a receiver type rather than a standalone package function.
 	IsMethod bool
-	// IsMask is true if any implementing receiver belongs to the Mask group.
-	IsMask bool
-	// IsRoundedUp is true if any merged implementation had its lane count rounded up.
-	IsRoundedUp bool
-	// RawName is the raw method name from the AST used to determine logical categorization.
-	RawName string
 	// Implementations maps receiver base types (e.g., "Int32", "Mask8") to their active bit widths (128, 256, 512).
 	// Used by the printer to efficiently fill the width table cells.
-	Implementations map[string]map[int]bool
+	Implementations map[string]map[int]*NormalizedMethod
 }
 
-func groupMethods(methods []NormalizedMethod) []*UnifiedMethod {
+func groupMethods(methods []*NormalizedMethod) []*UnifiedMethod {
 	type methodSortKey struct {
+		category string
 		name     string
 		sig      string
 		isMethod bool
@@ -37,32 +38,30 @@ func groupMethods(methods []NormalizedMethod) []*UnifiedMethod {
 	var result []*UnifiedMethod
 
 	for _, m := range methods {
-		key := methodSortKey{m.NormName, m.NormSig, m.Method.IsMethod}
+		key := methodSortKey{m.Method.GetCategory(), m.NormName, m.NormSig, m.Method.IsMethod}
 		row, exists := rowMap[key]
 		if !exists {
 			row = &UnifiedMethod{
+				Ex:              m,
 				NormName:        m.NormName,
 				NormSig:         m.NormSig,
 				IsMethod:        m.Method.IsMethod,
-				RawName:         m.Method.Name,
-				IsRoundedUp:     m.IsRoundedUp,
-				Implementations: make(map[string]map[int]bool),
+				Implementations: make(map[string]map[int]*NormalizedMethod),
 			}
 			rowMap[key] = row
 			result = append(result, row)
 		}
 
-		if m.IsRoundedUp {
-			row.IsRoundedUp = true
-		}
-		if strings.HasPrefix(m.ReceiverBase, "Mask") {
-			row.IsMask = true
-		}
+		BN := fmt.Sprintf("%s%d", m.Method.Receiver.Base(), m.Method.Receiver.ElemBits())
+		width := m.Method.Receiver.ElemBits() * m.Method.Receiver.Lanes()
 
-		if row.Implementations[m.ReceiverBase] == nil {
-			row.Implementations[m.ReceiverBase] = make(map[int]bool)
+		if row.Implementations[BN] == nil {
+			row.Implementations[BN] = make(map[int]*NormalizedMethod)
 		}
-		row.Implementations[m.ReceiverBase][m.Width] = true
+		if row.Implementations[BN][width] != nil {
+			log.Fatalf("duplicate normalized methods %s at %s %d", m.NormName, BN, width)
+		}
+		row.Implementations[BN][width] = m
 	}
 
 	return result
@@ -80,23 +79,36 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 	})
 
 	buckets := make(map[string][]*UnifiedMethod)
-	bucketOrder := []string{"Ungrouped", "Crypto", "Reinterpretation", "Numeric conversion", "Comparison", "Mask"}
+	bucketOrder := []string{
+		"Ungrouped",
+		"Load/Store",
+		"Math",
+		"Numeric conversion",
+		"Comparison",
+		"Rounding",
+		"Logical",
+		"Bit math",
+		"Shuffles",
+		"Shifts",
+		"Crypto",
+		"Reinterpretation",
+		"Mask",
+	}
 
 	for _, m := range extMeta {
-		category := getCategory(m.RawName, m.IsMask)
+		category := m.Ex.Method.GetCategory()
+		if !slices.Contains(bucketOrder, category) {
+			panic("unknown category " + category)
+		}
 		buckets[category] = append(buckets[category], m)
 	}
 
 	fmt.Println("## Table of Contents")
 	for _, bName := range bucketOrder {
 		if len(buckets[bName]) > 0 {
-			var link string
-			switch bName {
-			case "Numeric conversion":
-				link = "#numeric-conversion"
-			default:
-				link = "#" + strings.ToLower(bName)
-			}
+			link := "#" + strings.ToLower(bName)
+			link = strings.ReplaceAll(link, " ", "-")
+			link = strings.ReplaceAll(link, "/", "")
 			fmt.Printf("- [%s](%s)\n", bName, link)
 		}
 	}
@@ -185,6 +197,7 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 			}
 			fmt.Println()
 
+			inRounded, outRounded := false, false
 			for _, width := range allWidths {
 				fmt.Printf("| %d |", width)
 				for _, b := range activeBases {
@@ -193,8 +206,17 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 					lanes := width / bits
 
 					implemented := method.Implementations[b][width]
-					if implemented {
-						fmt.Printf(" `x%d` |", lanes)
+					if implemented != nil {
+						fmt.Printf(" `x%d`", lanes)
+						if implemented.InRounded {
+							fmt.Printf("†")
+							inRounded = true
+						}
+						if implemented.OutRounded {
+							fmt.Printf("‡")
+							outRounded = true
+						}
+						fmt.Printf(" |")
 					} else {
 						fmt.Print("  |")
 					}
@@ -203,13 +225,12 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 			}
 			fmt.Println()
 
-			if method.IsRoundedUp {
-				fmt.Println("Note: Result lane count is rounded up to the minimum viable vector size if necessary.")
+			if inRounded {
+				fmt.Println("† Argument width rounded up to minimum viable size.")
 				fmt.Println()
 			}
-
-			if method.NormName == "<T>FromBits" || (strings.HasSuffix(method.NormName, "FromBits") && strings.Contains(method.NormSig, "<b><M>")) {
-				fmt.Println("Note: If M < 8, the argument is `uint8`.")
+			if outRounded {
+				fmt.Println("‡ Result width rounded up to minimum viable size.")
 				fmt.Println()
 			}
 		}

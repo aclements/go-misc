@@ -21,6 +21,7 @@ import (
 	"log"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -40,90 +41,168 @@ type MethodMeta struct {
 }
 
 var (
-	basicRegex    = regexp.MustCompile(`\b(int|uint|float)(8|16|32|64)\b`)
-	pureMaskRegex = regexp.MustCompile(`^Mask(8|16|32|64)x(2|4|8|16|32|64)$`)
-	baseRegex     = regexp.MustCompile(`^(Int|Uint|Float|Mask)(\d+)$`)
+	// XXX Delete
+	baseRegex = regexp.MustCompile(`^(Int|Uint|Float|Mask)(\d+)$`)
 )
 
-func getCategory(funcName string, isMask bool) string {
+func (m *MethodMeta) GetCategory() string {
+	isMask := m.Receiver.Kind == TypeMask
 	if isMask {
 		return "Mask"
 	}
-	if strings.HasPrefix(funcName, "AES") || strings.HasPrefix(funcName, "SHA") {
-		return "Crypto"
+	if (!m.IsMethod && (strings.HasPrefix(m.Name, "Load") || strings.HasPrefix(m.Name, "Broadcast"))) || strings.HasPrefix(m.Name, "Store") {
+		return "Load/Store"
 	}
-	if strings.HasPrefix(funcName, "As") {
-		return "Reinterpretation"
+	if hasAnyPrefix(m.Name, "Abs", "Add", "Average", "Div", "DotProduct", "Max", "Min", "Mul", "Reciprocal", "Scale", "Sqrt", "Sub", "Sum") {
+		return "Math"
 	}
-	if strings.HasPrefix(funcName, "ConvertTo") || strings.HasPrefix(funcName, "TruncateTo") || strings.HasPrefix(funcName, "SaturateTo") || strings.HasPrefix(funcName, "ExtendTo") || strings.HasPrefix(funcName, "ExtendLo") {
+	if hasAnyPrefix(m.Name, "ConvertTo", "TruncateTo", "SaturateTo", "ExtendTo", "ExtendLo") {
 		return "Numeric conversion"
 	}
-	if funcName == "Equal" || funcName == "Less" || funcName == "LessEqual" || funcName == "Greater" || funcName == "GreaterEqual" || funcName == "NotEqual" {
+	if anyOf(m.Name, "Equal", "Less", "LessEqual", "Greater", "GreaterEqual", "NotEqual", "IsNaN", "IsZero") {
 		return "Comparison"
+	}
+	if hasAnyPrefix(m.Name, "Ceil", "Floor", "RoundToEven", "Trunc") {
+		return "Rounding"
+	}
+	if anyOf(m.Name, "And", "AndNot", "Not", "Or", "Xor") {
+		return "Logical"
+	}
+	if hasAnyPrefix(m.Name, "CarrylessMultiply", "GaloisField", "LeadingZeros", "OnesCount") {
+		return "Bit math"
+	}
+	if hasAnyPrefix(m.Name, "Permute", "ConcatPermute", "Compress", "Expand", "Interleave", "Select") {
+		return "Shuffles"
+	}
+	if hasAnyPrefix(m.Name, "Shift", "Rotate", "ConcatShift") {
+		return "Shifts"
+	}
+	if hasAnyPrefix(m.Name, "AES", "SHA") {
+		return "Crypto"
+	}
+	if hasAnyPrefix(m.Name, "As") {
+		return "Reinterpretation"
 	}
 	return "Ungrouped"
 }
 
-func (m *MethodMeta) GetCategory() string {
-	isMask := m.Receiver.Base == "Mask"
-	return getCategory(m.Name, isMask)
+func anyOf(s string, options ...string) bool {
+	return slices.Contains(options, s)
 }
 
-func (m *MethodMeta) ComputeFlags() NormalizeFlag {
-	var f NormalizeFlag
+func hasAnyPrefix(s string, prefixes ...string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
 
+func (m *MethodMeta) NormOptions() NormOptions {
 	category := m.GetCategory()
 
-	if category == "Reinterpretation" {
-		return NormKeepAll
+	type f = NormUnitFlags
+
+	// TODO: The AES* sizes are weird. Are they controls?
+
+	if category == "Load/Store" {
+		// Name is usually in the "output" domain, but since these are constructors,
+		// it's in the "input" domain.
+		return NormOptions{Name: f{All: NormInput}}
 	}
 
-	if strings.Contains(m.Name, "Broadcast1To") {
-		f |= NormResultKeepLanes
+	if category == "Reinterpretation" {
+		// Name and result are in output domain
+		return NormOptions{Name: f{All: NormOutput}, Out: f{All: NormOutput}}
+	}
+
+	if strings.HasPrefix(m.Name, "Broadcast1To") {
+		// Result B and N are input domain; name L and result L are output domain
+		return NormOptions{
+			NameFields: regexp.MustCompile(`Broadcast1To(?<L>\d+)`),
+			Name:       f{L: NormOutput},
+			Out:        f{L: NormOutput},
+		}
 	}
 
 	if category == "Numeric conversion" {
-		f |= NormResultKeepLanesExact | NormResultKeepBase | NormResultKeepBits | NormNameKeepBase | NormNameKeepBits
+		// Name B N and result B N are output domain. Result L is input domain rounding allowed
+		return NormOptions{
+			NameFields: regexp.MustCompile(`.*To(?<B>[a-zA-Z]+)(?<N>\d+).*`),
+			Name:       f{B: NormOutput, N: NormOutput},
+			Out:        f{B: NormOutput, N: NormOutput, L: NormInput | NormRoundUp},
+		}
 	}
 
-	if strings.Contains(m.Name, "GetElem") || strings.Contains(m.Name, "SetElem") || strings.Contains(m.Name, "Select") || strings.Contains(m.Name, "PermuteScalars") {
-		f |= NormParamKeepUint8
+	if m.Name == "GetElem" || m.Name == "SetElem" || strings.HasPrefix(m.Name, "Select") || strings.HasPrefix(m.Name, "PermuteScalars") {
+		// First param group is control domain
+		//
+		// TODO: Most of these should have obvious parameter names, but not all do
+		return NormOptions{
+			Ins: []f{{All: NormControl}},
+		}
 	}
 
-	if strings.Contains(m.Name, "Shift") || strings.Contains(m.Name, "Rotate") {
-		f |= NormParamKeepUint64
-	}
-
-	if m.Decl != nil && m.Decl.Type.Params != nil {
-		for _, field := range m.Decl.Type.Params.List {
-			for _, name := range field.Names {
-				if strings.Contains(name.Name, "prec") {
-					f |= NormParamKeepUint8
-				}
+	if strings.HasPrefix(m.Name, "Shift") || strings.HasPrefix(m.Name, "Rotate") {
+		// If first param group is a basic type, it's control domain
+		//
+		// TODO: Always call this "shift" or "by" or "bits"
+		if m.Params[0].Kind == TypeBasic {
+			return NormOptions{
+				Ins: []f{{All: NormControl}},
 			}
 		}
 	}
 
-	if category == "Mask" && strings.Contains(m.Name, "FromBits") && m.Receiver.Lanes < 8 {
-		f |= NormForceMaskLanes
-	}
-
-	return f
-}
-
-func cloneFuncType(fset *token.FileSet, ft *ast.FuncType) *ast.FuncType {
-	sig := nodeToString(fset, ft)
-	dummy := "package main\nfunc _" + sig
-	f, err := parser.ParseFile(fset, "", dummy, 0)
-	if err != nil {
-		return ft
-	}
-	for _, decl := range f.Decls {
-		if fd, ok := decl.(*ast.FuncDecl); ok {
-			return fd.Type
+	if strings.HasPrefix(m.Name, "GaloisFieldAffineTransform") {
+		// First param BN is control; lanes is L/8 (!)
+		return NormOptions{
+			Ins: []f{{B: NormControl, N: NormControl, L: NormInput | NormDiv8}},
 		}
 	}
-	return ft
+
+	if strings.HasPrefix(m.Name, "CarrylessMultiply") {
+		// First param group is a (very silly!) control.
+		return NormOptions{
+			Ins: []f{{All: NormControl}},
+		}
+	}
+
+	if category == "Mask" {
+		if strings.HasSuffix(m.Name, "FromBits") {
+			// Param is input domain, width rounding allowed. The element width matches
+			// the number of lanes.
+			return NormOptions{
+				Name: f{All: NormInput},
+				Ins:  []f{{L: NormInput | NormRoundUp, SwapNL: true}},
+			}
+		}
+		if strings.HasPrefix(m.Name, "ToBits") {
+			// Result is input domain, width rounding allowed. The element width
+			// matches the number of lanes.
+			return NormOptions{
+				Out: f{L: NormInput | NormRoundUp, SwapNL: true},
+			}
+		}
+	}
+
+	if m.Decl != nil && m.Decl.Type.Params != nil {
+		ins := make([]NormUnitFlags, len(m.Decl.Type.Params.List))
+		for i, list := range m.Decl.Type.Params.List {
+			switch list.Names[0].Name {
+			case "prec", "shift": // control
+				ins[i].All = NormControl
+			case "indices": // Uint<N>x<L> control
+				ins[i].B = NormControl
+			case "rconVal", "constant": // Cypto
+				ins[i].All = NormControl
+			}
+		}
+		return NormOptions{Ins: ins}
+	}
+
+	return NormOptions{}
 }
 
 func main() {

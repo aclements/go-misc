@@ -1,40 +1,78 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-type NormalizeFlag uint32
+type NormOptions struct {
+	// NameFields matches the name, with named subexpressions "B", "N", and "L"
+	// matching the base, element bits, and lane count fields respectively.
+	//
+	// If nil, no name normalization is done.
+	NameFields *regexp.Regexp
+
+	Name NormUnitFlags // Defaults to NormOutput
+
+	Ins []NormUnitFlags // Defaults to NormInput
+
+	Out NormUnitFlags // Defaults to NormInput
+}
+
+// NormUnitFlags holds the flags for a single "unit", such as a function name or
+// type.
+type NormUnitFlags struct {
+	All     NormFieldFlags
+	B, N, L NormFieldFlags // Defaults to All if unset
+
+	// SwapNL indicates that the roles of "N" and "L" should be swapped.
+	SwapNL bool
+}
+
+// NormFieldFlags holds the flags for a single "field", such as a base name,
+type NormFieldFlags int
 
 const (
-	// NormResultKeepLanes preserves the literal lane count in method return types.
-	NormResultKeepLanes NormalizeFlag = 1 << iota
-	// NormResultKeepLanesExact preserves the exact lane count in method return types without scaling.
-	NormResultKeepLanesExact
-	// NormResultKeepBase preserves the literal base type name in method return types.
-	NormResultKeepBase
-	// NormResultKeepBits preserves the literal bit width in method return types.
-	NormResultKeepBits
-	// NormNameKeepBase preserves the literal base type name inside method names.
-	NormNameKeepBase
-	// NormNameKeepLanes preserves the literal lane count inside method names.
-	NormNameKeepLanes
-	// NormNameKeepBits preserves the literal bit width inside method names.
-	NormNameKeepBits
-	// NormParamKeepUint8 preserves the literal 'uint8' basic type in the first parameter group.
-	NormParamKeepUint8
-	// NormParamKeepUint64 preserves the literal 'uint64' basic type in the first parameter group.
-	NormParamKeepUint64
-	// NormKeepAll bypasses all normalization entirely.
-	NormKeepAll
-	// NormForceMaskLanes coerces literal 'uint8' parameters into the '<b><M>' lane token, even if M < 8.
-	NormForceMaskLanes
+	// NormInput, NormOutput, and NormControl indicate the domain of a
+	// normalization field.
+	NormInput NormFieldFlags = 1 << iota
+	NormOutput
+	NormControl
+
+	// NormRoundUp indicates that this field can be rounded up to make a type
+	// possible. Can be applied to element bits or lane count.
+	NormRoundUp
+
+	// NormDiv8 indicates that this field can match x/8.
+	NormDiv8
+
+	NormDefault NormFieldFlags = 0
 )
+
+func (u NormUnitFlags) WithDefaults(allDefault NormFieldFlags) NormUnitFlags {
+	u.All = cmp.Or(u.All, allDefault)
+	u.B = cmp.Or(u.B, u.All)
+	u.N = cmp.Or(u.N, u.All)
+	u.L = cmp.Or(u.L, u.All)
+	return u
+}
+
+func (o NormOptions) WithDefaults() NormOptions {
+	o.Name = o.Name.WithDefaults(NormOutput)
+	o.Ins = slices.Clone(o.Ins)
+	for i := range o.Ins {
+		o.Ins[i] = o.Ins[i].WithDefaults(NormInput)
+	}
+	o.Out = o.Out.WithDefaults(NormInput)
+	return o
+}
 
 type NormalizedMethod struct {
 	// Method is the original raw method metadata.
@@ -43,16 +81,14 @@ type NormalizedMethod struct {
 	NormName string
 	// NormSig is the canonicalized signature string (e.g., "() T", "() Float32x<M>").
 	NormSig string
-	// IsRoundedUp is true if the result lane count was promoted to hit the 128-bit bound.
-	IsRoundedUp bool
-	// ReceiverBase is the extracted receiver group (e.g., "Int32", "Mask8").
-	ReceiverBase string
-	// Width is the bit width of the receiver type (128, 256, or 512).
-	Width int
+	// InRounded indicates that an argument type was expanded to hit the minimum width.
+	InRounded bool
+	// OutRounded indicates that a result type was expanded.
+	OutRounded bool
 }
 
-func normalizeMethods(typeGroups []*TypeGroup, fset *token.FileSet) []NormalizedMethod {
-	var result []NormalizedMethod
+func normalizeMethods(typeGroups []*TypeGroup, fset *token.FileSet) []*NormalizedMethod {
+	var result []*NormalizedMethod
 
 	for _, tg := range typeGroups {
 		switch tg.Type.Kind {
@@ -60,277 +96,196 @@ func normalizeMethods(typeGroups []*TypeGroup, fset *token.FileSet) []Normalized
 		default:
 			panic("bad type group kind")
 		}
-		receiverBase := fmt.Sprintf("%s%d", tg.Type.Base, tg.Type.Bits)
-		width := tg.Type.Bits * tg.Type.Lanes
-
 		for _, m := range tg.Funcs {
-			flags := m.ComputeFlags()
-			normName, rounded1 := normalizeName(m, flags)
-
-			tBits := m.Receiver.Bits
-			tLanes := m.Receiver.Lanes
-			elemType := m.Receiver.getElemType()
-			maskType := fmt.Sprintf("Mask%dx%d", tBits, tLanes)
-
-			ft, rounded2 := normalizeAST(m, flags, elemType, maskType, fset)
-			normSig := nodeToString(fset, ft)
-
-			result = append(result, NormalizedMethod{
-				Method:       m,
-				NormName:     normName,
-				NormSig:      normSig,
-				IsRoundedUp:  rounded1 || rounded2,
-				ReceiverBase: receiverBase,
-				Width:        width,
-			})
+			result = append(result, m.normalize(fset))
 		}
 	}
 
 	return result
 }
 
-// normalizeAST clones a function's AST and normalizes its parameter and result types
-// based on the provided NormalizeFlag rules. It returns the modified AST and a boolean
-// indicating whether any lane counts were rounded up due to hardware constraints.
-func normalizeAST(meta *MethodMeta, flags NormalizeFlag, elemType, maskType string, fset *token.FileSet) (*ast.FuncType, bool) {
-	if meta.Decl == nil {
-		return nil, false
+func (m *MethodMeta) normalize(fset *token.FileSet) *NormalizedMethod {
+	options := m.NormOptions().WithDefaults()
+
+	// Normalize name
+	normName := m.Name
+	if options.NameFields != nil {
+		ns, ok := NewNormString(m.Name, options.NameFields)
+		if !ok {
+			panic(fmt.Sprintf("method name %q does not match %s", m.Name, options.NameFields))
+		}
+		normName, _ = normalizeUnit(ns, m.Receiver, options.Name)
 	}
-	if flags&NormKeepAll != 0 {
-		return meta.Decl.Type, false
+	// Even if we don't have detailed fields for the name, we can replace a whole
+	// vector receiver with <T>.
+	if options.Name.B&options.Name.N&options.Name.L&NormInput != 0 {
+		normName = strings.ReplaceAll(normName, m.Receiver.String, "<T>")
 	}
 
-	ft := cloneFuncType(fset, meta.Decl.Type)
-	tLanes := meta.Receiver.Lanes
-	typeName := meta.Receiver.Name
-	roundedUpAny := false
+	// Normalize types
+	ft := cloneFuncType(fset, m.Decl.Type)
+	inRounded := false
+	if ft.Params != nil {
+		for i, paramGroup := range ft.Params.List {
+			inOpts := NormUnitFlags{}.WithDefaults(NormInput)
+			if i < len(options.Ins) {
+				inOpts = options.Ins[i]
+			}
+			if normalizeType(paramGroup.Type, m.Receiver, inOpts) {
+				inRounded = true
+			}
+		}
+	}
+	outRounded := false
+	if ft.Results != nil {
+		for _, resultGroup := range ft.Results.List {
+			if normalizeType(resultGroup.Type, m.Receiver, options.Out) {
+				outRounded = true
+			}
+		}
+	}
 
-	ast.Inspect(ft, func(n ast.Node) bool {
+	normSig := nodeToString(fset, ft)
+
+	return &NormalizedMethod{
+		Method:     m,
+		NormName:   normName,
+		NormSig:    normSig,
+		InRounded:  inRounded,
+		OutRounded: outRounded,
+	}
+}
+
+func cloneFuncType(fset *token.FileSet, ft *ast.FuncType) *ast.FuncType {
+	sig := nodeToString(fset, ft)
+	dummy := "package main\nfunc _" + sig
+	f, err := parser.ParseFile(fset, "", dummy, 0)
+	if err != nil {
+		return ft
+	}
+	for _, decl := range f.Decls {
+		if fd, ok := decl.(*ast.FuncDecl); ok {
+			return fd.Type
+		}
+	}
+	return ft
+}
+
+func normalizeType(typ ast.Expr, input ParsedType, options NormUnitFlags) bool {
+	var maskType string
+	if input.Kind == TypeVec {
+		maskType = input.With("Mask", "", "")
+	}
+
+	rounded := false
+	ast.Inspect(typ, func(n ast.Node) bool {
+		// Match arrays
 		if arr, ok := n.(*ast.ArrayType); ok && arr.Len != nil {
 			if lit, ok := arr.Len.(*ast.BasicLit); ok && lit.Kind == token.INT {
-				val, _ := strconv.Atoi(lit.Value)
-				if val == tLanes {
-					arr.Len = &ast.Ident{Name: "<M>"}
+				if options.L&NormInput != 0 {
+					val, _ := strconv.Atoi(lit.Value)
+					if val == input.Lanes() {
+						arr.Len = &ast.Ident{Name: "M"}
+					}
 				}
 			}
+		}
+
+		// Match named types
+		if ident, ok := n.(*ast.Ident); ok {
+			if ident.Name == maskType {
+				// Mask type implied by input type
+				ident.Name = "Mask"
+				return true
+			}
+
+			t := parseType(ident.Name)
+			if t.Kind == "" {
+				return true
+			}
+
+			r1 := false
+			ident.Name, r1 = normalizeUnit(t.NormString, input, options)
+			rounded = rounded || r1
 		}
 		return true
 	})
 
-	normalizeFieldList := func(list *ast.FieldList, isResult bool) {
-		if list == nil {
-			return
-		}
-		for i, field := range list.List {
-			isFirstGroup := i == 0
-
-			isIndices := false
-			for _, name := range field.Names {
-				if name.Name == "indices" {
-					isIndices = true
-					break
-				}
-			}
-
-			ast.Inspect(field.Type, func(n ast.Node) bool {
-				if ident, ok := n.(*ast.Ident); ok {
-					if flags&NormForceMaskLanes != 0 && ident.Name == "uint8" && !isResult {
-						ident.Name = "<b><M>"
-					} else if ident.Name == "uint8" && flags&NormParamKeepUint8 != 0 && !isResult && isFirstGroup {
-						// Retain literal
-					} else if ident.Name == "uint64" && flags&NormParamKeepUint64 != 0 && !isResult && isFirstGroup {
-						// Retain literal
-					} else if ident.Name == typeName && !(isResult && (flags&NormResultKeepLanes != 0)) && !isIndices {
-						ident.Name = "T"
-					} else if ident.Name == elemType {
-						ident.Name = "<b><N>"
-					} else if ident.Name == maskType {
-						ident.Name = "Mask"
-					} else {
-						res, rounded := normalizeTypeName(ident.Name, meta, flags, isResult, false, !isResult && isIndices)
-						ident.Name = res
-						if rounded {
-							roundedUpAny = true
-						}
-					}
-				}
-				return true
-			})
-		}
-	}
-
-	normalizeFieldList(ft.Params, false)
-	normalizeFieldList(ft.Results, true)
-
-	return ft, roundedUpAny
+	return rounded
 }
 
-// normalizeName canonicalizes the provided MethodMeta name into a normalized form,
-// enabling method aggregation across identical logical vector operations.
-func normalizeName(meta *MethodMeta, flags NormalizeFlag) (string, bool) {
-	if flags&NormKeepAll != 0 || strings.HasPrefix(meta.Name, "As") {
-		return meta.Name, false
+// normalizeUnit normalizes a single "unit" such as a type or function name.
+func normalizeUnit(unit NormString, input ParsedType, options NormUnitFlags) (string, bool) {
+	rounded := false
+	var B, N, L string
+
+	if options.B&NormInput != 0 {
+		switch unit.Base() {
+		case strings.ToLower(input.Base()):
+			// Check this first in case input is already a built-in and thus
+			// lower-case.
+			B = "<b>"
+		case input.Base():
+			B = "<B>"
+		}
 	}
 
-	typeName := meta.Receiver.Name
-	roundedUpAny := false
-
-	if strings.Contains(meta.Name, typeName) {
-		return strings.ReplaceAll(meta.Name, typeName, "<T>"), false
+	if options.SwapNL {
+		unit.N, unit.L = unit.L, unit.N
 	}
 
-	typeRegexRaw := regexp.MustCompile(`(Int|Uint|Float|Mask)(8|16|32|64)(x(2|4|8|16|32|64))?`)
-
-	name := typeRegexRaw.ReplaceAllStringFunc(meta.Name, func(m string) string {
-		res, rounded := normalizeTypeName(m, meta, flags, false, true, false)
-		if rounded {
-			roundedUpAny = true
-		}
-		return res
-	})
-	return name, roundedUpAny
-}
-
-// normalizeTypeName parses a single Go type name and transforms it based on the
-// requested flags, substituting base types, bit widths, and lane counts with canonical tokens.
-func normalizeTypeName(name string, meta *MethodMeta, flags NormalizeFlag, isResult, isName, skipBaseOverride bool) (string, bool) {
-	skipLane := (isResult && (flags&NormResultKeepLanes != 0)) || (isName && (flags&NormNameKeepLanes != 0))
-	skipBase := (isResult && (flags&NormResultKeepBase != 0)) || (isName && (flags&NormNameKeepBase != 0)) || skipBaseOverride
-	skipBits := (isResult && (flags&NormResultKeepBits != 0)) || (isName && (flags&NormNameKeepBits != 0))
-
-	tBase, tBits, tLanes := meta.Receiver.Base, meta.Receiver.Bits, meta.Receiver.Lanes
-	roundedUp := false
-
-	typeRegexRaw := regexp.MustCompile(`(Int|Uint|Float|Mask)(8|16|32|64)(x(2|4|8|16|32|64))?`)
-
-	if m := typeRegexRaw.FindStringSubmatch(name); len(m) > 1 {
-		base, bitsStr := m[1], m[2]
-		bits, _ := strconv.Atoi(bitsStr)
-
-		var sb strings.Builder
-		if base == tBase && !skipBase {
-			sb.WriteString("<B>")
-		} else {
-			sb.WriteString(base)
-		}
-
-		if skipBits {
-			sb.WriteString(bitsStr)
-		} else {
-			if bits == tBits {
-				sb.WriteString("<N>")
-			} else if bits == tBits/2 {
-				sb.WriteString("<N/2>")
-			} else if bits == tBits*2 {
-				sb.WriteString("<N*2>")
-			} else {
-				sb.WriteString(bitsStr)
-			}
-		}
-
-		if len(m) > 3 && m[3] != "" {
-			lanesStr := m[4]
-			sb.WriteString("x")
-			if skipLane {
-				sb.WriteString(lanesStr)
-			} else {
-				lanes, _ := strconv.Atoi(lanesStr)
-
-				expectedLanes := tLanes
-				keepLanesExact := (isResult && (flags&NormResultKeepLanesExact != 0))
-
-				if !keepLanesExact {
-					if lanesStr == strconv.Itoa(tLanes/2) {
-						expectedLanes = tLanes / 2
-					} else if lanesStr == strconv.Itoa(tLanes/4) {
-						expectedLanes = tLanes / 4
-					} else if lanesStr == strconv.Itoa(tLanes*2) {
-						expectedLanes = tLanes * 2
-					}
-				}
-
-				effectiveExpectedLanes := expectedLanes
-				if expectedLanes*bits < 128 {
-					effectiveExpectedLanes = 128 / bits
-					if lanes == effectiveExpectedLanes && lanes != expectedLanes {
-						roundedUp = true
-					}
-				}
-
-				if lanes == effectiveExpectedLanes {
-					if keepLanesExact || expectedLanes == tLanes {
-						sb.WriteString("<M>")
-					} else if expectedLanes == tLanes/2 {
-						sb.WriteString("<M/2>")
-					} else if expectedLanes == tLanes/4 {
-						sb.WriteString("<M/4>")
-					} else if expectedLanes == tLanes*2 {
-						sb.WriteString("<M*2>")
-					}
-				} else {
-					sb.WriteString(lanesStr)
-				}
-			}
-		}
-		return sb.String(), roundedUp
+	minSize := 0
+	switch input.Kind {
+	case TypeMask:
+		minSize = 8 // Basic type width
+	case TypeVec:
+		minSize = 128
 	}
 
-	if m := pureMaskRegex.FindStringSubmatch(name); len(m) > 1 {
-		bitsStr, lanesStr := m[1], m[2]
-		bits, _ := strconv.Atoi(bitsStr)
-
-		var sb strings.Builder
-		if tBase == "Mask" && !skipBase {
-			sb.WriteString("<B>")
-		} else {
-			sb.WriteString("Mask")
+	if options.N&NormInput != 0 {
+		want := input.ElemBits()
+		r1 := options.N&NormRoundUp != 0 && unit.Lanes()*want < minSize
+		if r1 {
+			want = minSize / unit.Lanes()
 		}
-
-		if skipBits {
-			sb.WriteString(bitsStr)
-		} else {
-			if bits == tBits {
-				sb.WriteString("<N>")
-			} else {
-				sb.WriteString(bitsStr)
-			}
+		switch unit.ElemBits() {
+		case want:
+			N = "<N>"
+		case want / 2:
+			N = "<N/2>"
+		case want * 2:
+			N = "<N*2>"
 		}
-
-		sb.WriteString("x")
-		if skipLane {
-			sb.WriteString(lanesStr)
-		} else {
-			lanes, _ := strconv.Atoi(lanesStr)
-			if lanes == tLanes {
-				sb.WriteString("<M>")
-			} else {
-				sb.WriteString(lanesStr)
-			}
-		}
-		return sb.String(), false
+		rounded = rounded || (r1 && N != "")
 	}
 
-	if m := basicRegex.FindStringSubmatch(name); len(m) > 1 {
-		_, bitsStr := m[1], m[2]
-		bits, _ := strconv.Atoi(bitsStr)
-
-		if tBase == "Mask" {
-			if bits == tLanes && !skipLane {
-				return "<b><M>", false
-			}
-		} else {
-			if bits == tBits {
-				return "<b><N>", false
-			}
-			if bits == tBits/2 {
-				return "<b><N/2>", false
-			}
-			if bits == tBits*2 {
-				return "<b><N*2>", false
+	if options.L&NormInput != 0 && unit.Lanes() != 1 {
+		want := input.Lanes()
+		r1 := options.L&NormRoundUp != 0 && unit.ElemBits()*want < minSize
+		if r1 {
+			want = minSize / unit.ElemBits()
+		}
+		switch unit.Lanes() {
+		case want:
+			L = "<L>"
+		case want / 2:
+			L = "<L/2>"
+		case want * 2:
+			L = "<L*2>"
+		case want / 8:
+			if options.L&NormDiv8 != 0 {
+				L = "<L/8>"
 			}
 		}
-		return name, false
+		rounded = rounded || (r1 && L != "")
 	}
 
-	return name, false
+	if B == "<B>" && N == "<N>" && L == "<L>" {
+		return "T", rounded
+	}
+	norm := unit.With(B, N, L)
+
+	// Finally, remove any "><" so we don't get annoying things "<b><N>".
+	norm = strings.ReplaceAll(norm, "><", "")
+	return norm, rounded
 }

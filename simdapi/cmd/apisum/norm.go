@@ -81,6 +81,8 @@ type NormalizedMethod struct {
 	NormName string
 	// NormSig is the canonicalized signature string (e.g., "() T", "() Float32x<M>").
 	NormSig string
+	// NormDoc is the canonicalized doc string.
+	NormDoc string
 	// InRounded indicates that an argument type was expanded to hit the minimum width.
 	InRounded bool
 	// OutRounded indicates that a result type was expanded.
@@ -151,6 +153,7 @@ func (m *MethodMeta) normalize(fset *token.FileSet) *NormalizedMethod {
 		Method:     m,
 		NormName:   normName,
 		NormSig:    normSig,
+		NormDoc:    normalizeDoc(m, normName),
 		InRounded:  inRounded,
 		OutRounded: outRounded,
 	}
@@ -288,4 +291,27 @@ func normalizeUnit(unit NormString, input ParsedType, options NormUnitFlags) (st
 	// Finally, remove any "><" so we don't get annoying things "<b><N>".
 	norm = strings.ReplaceAll(norm, "><", "")
 	return norm, rounded
+}
+
+func normalizeDoc(m *MethodMeta, normName string) string {
+	doc := m.Doc
+	// Replace the method name.
+	doc = strings.ReplaceAll(doc, m.Name, "<code>"+normName+"</code>")
+	// Replace the receiver type.
+	doc = strings.ReplaceAll(doc, m.Receiver.String, "T")
+
+	// Remove assembly details.
+	lines := strings.Split(doc, "\n")
+	var cleaned []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "Asm:") || strings.Contains(trimmed, "CPU Feature:") {
+			break
+		}
+		cleaned = append(cleaned, line)
+	}
+	for len(cleaned) > 0 && strings.TrimSpace(cleaned[len(cleaned)-1]) == "" {
+		cleaned = cleaned[:len(cleaned)-1]
+	}
+	return strings.Join(cleaned, "\n")
 }

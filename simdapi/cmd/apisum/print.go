@@ -38,6 +38,7 @@ func groupMethods(methods []*NormalizedMethod) []*UnifiedMethod {
 	for _, m := range methods {
 		key := methodSortKey{m.Method.GetCategory(), m.NormName, m.NormSig, m.Method.IsMethod}
 		row, exists := rowMap[key]
+
 		if !exists {
 			row = &UnifiedMethod{
 				Ex:              m,
@@ -182,6 +183,33 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 				prefix = "T."
 			}
 			fmt.Printf("### `%s%s%s`\n\n", prefix, method.NormName, sig)
+
+			if doc := method.Ex.NormDoc; doc != "" {
+				fmt.Printf("%s\n\n", doc)
+
+				// Check for other docs
+				var docs []string
+				docSet := map[string]bool{doc: true}
+				for _, width := range allWidths {
+					for _, b := range activeBases {
+						m := method.Implementations[b][width]
+						if m == nil {
+							continue
+						}
+						if !docSet[m.NormDoc] {
+							docSet[m.NormDoc] = true
+							docs = append(docs, m.NormDoc)
+						}
+					}
+				}
+				if len(docs) > 0 {
+					fmt.Printf("<details><summary>(plus %d other doc variants)</summary>\n", len(docs))
+					for _, doc := range docs {
+						fmt.Printf("<p>%s</p>\n", doc)
+					}
+					fmt.Printf("</details>\n\n")
+				}
+			}
 
 			fmt.Print("| Width |")
 			for _, b := range activeBases {

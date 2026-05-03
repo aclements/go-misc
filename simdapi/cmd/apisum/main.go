@@ -42,6 +42,7 @@ type MethodMeta struct {
 	Params   []ParsedType
 	Results  []ParsedType
 	Decl     *ast.FuncDecl
+	Doc      string
 }
 
 var (
@@ -295,6 +296,7 @@ func parseFuncs(docPkg *doc.Package, fset *token.FileSet) []*TypeGroup {
 			Params:   params,
 			Results:  results,
 			Decl:     f.Decl,
+			Doc:      f.Doc,
 		})
 	}
 

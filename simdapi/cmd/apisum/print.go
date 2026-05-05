@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"go/doc/comment"
 	"log"
 	"regexp"
 	"slices"
@@ -66,6 +67,15 @@ func groupMethods(methods []*NormalizedMethod) []*UnifiedMethod {
 	return result
 }
 
+func markdownDoc(doc string, normName string) string {
+	var p comment.Parser
+	d := p.Parse(doc)
+	var pr comment.Printer
+	md := string(pr.Markdown(d))
+	md = strings.ReplaceAll(md, "%%METHOD%%", "`"+normName+"`")
+	return strings.TrimSpace(md)
+}
+
 func printMethodBlocks(extMeta []*UnifiedMethod) {
 	sort.Slice(extMeta, func(i, j int) bool {
 		if extMeta[i].NormName != extMeta[j].NormName {
@@ -114,6 +124,7 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 	fmt.Println()
 
 	allWidths := []int{128, 256, 512}
+	baseRegex := regexp.MustCompile(`^(Int|Uint|Float|Mask)(\d+)$`)
 
 	for _, bName := range bucketOrder {
 		activeMethods := buckets[bName]
@@ -185,7 +196,7 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 			fmt.Printf("### `%s%s%s`\n\n", prefix, method.NormName, sig)
 
 			if doc := method.Ex.NormDoc; doc != "" {
-				fmt.Printf("%s\n\n", doc)
+				fmt.Printf("%s\n\n", markdownDoc(doc, method.NormName))
 
 				// Check for other docs
 				var docs []string
@@ -203,9 +214,9 @@ func printMethodBlocks(extMeta []*UnifiedMethod) {
 					}
 				}
 				if len(docs) > 0 {
-					fmt.Printf("<details><summary>(plus %d other doc variants)</summary>\n", len(docs))
+					fmt.Printf("<details><summary>(plus %d other doc variants)</summary>\n\n", len(docs))
 					for _, doc := range docs {
-						fmt.Printf("<p>%s</p>\n", doc)
+						fmt.Printf("%s\n\n", markdownDoc(doc, method.NormName))
 					}
 					fmt.Printf("</details>\n\n")
 				}

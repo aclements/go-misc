@@ -52,9 +52,12 @@ type NormString struct {
 	B, N, L []int // nil or start,end indexes
 }
 
+// NewNormString matches s against re to mark the B, N, and L fields. re may
+// have capture groups named "B", "N", and "L" and will be implicitly anchored
+// to match the whole string.
 func NewNormString(s string, re *regexp.Regexp) (NormString, bool) {
 	m := re.FindStringSubmatchIndex(s)
-	if m == nil {
+	if m == nil || m[0] != 0 || m[1] != len(s) {
 		return NormString{}, false
 	}
 	ns := NormString{String: s}

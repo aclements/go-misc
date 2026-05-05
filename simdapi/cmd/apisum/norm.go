@@ -295,10 +295,13 @@ func normalizeUnit(unit NormString, input ParsedType, options NormUnitFlags) (st
 
 func normalizeDoc(m *MethodMeta, normName string) string {
 	doc := m.Doc
-	// Replace the method name.
-	doc = strings.ReplaceAll(doc, m.Name, "<code>"+normName+"</code>")
-	// Replace the receiver type.
-	doc = strings.ReplaceAll(doc, m.Receiver.String, "T")
+
+	// Replace method name and receiver type with placeholders.
+	doc = strings.ReplaceAll(doc, m.Name, "%%METHOD%%")
+	re := regexp.MustCompile(`\b(a |an )` + regexp.QuoteMeta(m.Receiver.String) + `\b`)
+	doc = re.ReplaceAllString(doc, `a T`)
+	re = regexp.MustCompile(`\b` + regexp.QuoteMeta(m.Receiver.String) + `\b`)
+	doc = re.ReplaceAllString(doc, `T`)
 
 	// Remove assembly details.
 	lines := strings.Split(doc, "\n")
@@ -313,5 +316,5 @@ func normalizeDoc(m *MethodMeta, normName string) string {
 	for len(cleaned) > 0 && strings.TrimSpace(cleaned[len(cleaned)-1]) == "" {
 		cleaned = cleaned[:len(cleaned)-1]
 	}
-	return strings.Join(cleaned, "\n")
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }

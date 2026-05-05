@@ -45,11 +45,6 @@ type MethodMeta struct {
 	Doc      string
 }
 
-var (
-	// XXX Delete
-	baseRegex = regexp.MustCompile(`^(Int|Uint|Float|Mask)(\d+)$`)
-)
-
 func (m *MethodMeta) GetCategory() string {
 	isMask := m.Receiver.Kind == TypeMask
 	if isMask {
@@ -117,6 +112,12 @@ func (m *MethodMeta) NormOptions() NormOptions {
 		return NormOptions{Name: f{All: NormInput}}
 	}
 
+	if category == "Math" {
+		if m.Name == "SumAbsDiff" {
+			return NormOptions{Out: f{L: NormInput | NormDiv8}}
+		}
+	}
+
 	if category == "Reinterpretation" {
 		// Name and result are in output domain
 		return NormOptions{Name: f{All: NormOutput}, Out: f{All: NormOutput}}
@@ -132,11 +133,26 @@ func (m *MethodMeta) NormOptions() NormOptions {
 	}
 
 	if category == "Numeric conversion" {
-		// Name B N and result B N are output domain. Result L is input domain rounding allowed
+		if strings.HasPrefix(m.Name, "ExtendLo") {
+			// For these the result lanes don't match the input, but are in the name.
+			return NormOptions{
+				NameFields: regexp.MustCompile(`ExtendLo(?<L>\d+)To(?<B>[^\d]+)(?<N>\d+)`),
+				Name:       f{All: NormOutput},
+				Out:        f{All: NormOutput},
+			}
+		}
+		// Name B N and result B N are output domain. Result L matches input, with rounding allowed
+		round := NormRoundUp
+		if strings.Contains(m.Name, "Concat") {
+			// Every exception has an exception. If this is a concat operation, the
+			// "input" is more like 2*L lanes anyway and it fills the result, so don't
+			// round up L.
+			round = 0
+		}
 		return NormOptions{
-			NameFields: regexp.MustCompile(`.*To(?<B>[a-zA-Z]+)(?<N>\d+).*`),
+			NameFields: regexp.MustCompile(`(?:Convert|Extend|Saturate|Truncate)To(?<B>[^\d]+)(?<N>\d+).*`),
 			Name:       f{B: NormOutput, N: NormOutput},
-			Out:        f{B: NormOutput, N: NormOutput, L: NormInput | NormRoundUp},
+			Out:        f{B: NormOutput, N: NormOutput, L: NormInput | round},
 		}
 	}
 
@@ -149,21 +165,13 @@ func (m *MethodMeta) NormOptions() NormOptions {
 		}
 	}
 
-	if strings.HasPrefix(m.Name, "Shift") || strings.HasPrefix(m.Name, "Rotate") {
-		// If first param group is a basic type, it's control domain
-		//
-		// TODO: Always call this "shift" or "by" or "bits"
-		if m.Params[0].Kind == TypeBasic {
-			return NormOptions{
-				Ins: []f{{All: NormControl}},
-			}
-		}
-	}
-
 	if strings.HasPrefix(m.Name, "GaloisFieldAffineTransform") {
-		// First param BN is control; lanes is L/8 (!)
+		// First param BN is control with lanes L/8 (!), second param is control
 		return NormOptions{
-			Ins: []f{{B: NormControl, N: NormControl, L: NormInput | NormDiv8}},
+			Ins: []f{
+				{B: NormControl, N: NormControl, L: NormInput | NormDiv8},
+				{All: NormControl},
+			},
 		}
 	}
 
@@ -196,8 +204,15 @@ func (m *MethodMeta) NormOptions() NormOptions {
 		ins := make([]NormUnitFlags, len(m.Decl.Type.Params.List))
 		for i, list := range m.Decl.Type.Params.List {
 			switch list.Names[0].Name {
-			case "prec", "shift": // control
+			case "prec": // control
 				ins[i].All = NormControl
+			case "shift":
+				if m.Params[i].Kind == TypeVec {
+					// Element bits and lanes match input
+					ins[i].B = NormControl
+				} else {
+					ins[i].All = NormControl
+				}
 			case "indices": // Uint<N>x<L> control
 				ins[i].B = NormControl
 			case "rconVal", "constant": // Cypto

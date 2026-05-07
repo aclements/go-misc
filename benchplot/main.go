@@ -4,6 +4,9 @@
 
 // Command benchplot plots the results of benchmarks over time.
 //
+// THIS VERSION IS DEPRECATED. Please see the new version at
+// https://pkg.go.dev/github.com/aclements/benchplot
+//
 // benchplot takes an input file in Go benchmark format [1]. Each
 // benchmark result must have a "commit" configuration key that gives
 // the full commit hash of the revision that gave that result.
